@@ -26,7 +26,7 @@ jobs:
         run: uv run ruff check .
 
       - name: Type Check with Ty
-        run: uv run ty .
+        run: uv run ty check .
 
       - name: Run tests with Pytest and 100% Coverage
         run: uv run python -m pytest --cov=offline_debug --cov-report=term-missing --cov-fail-under=100
