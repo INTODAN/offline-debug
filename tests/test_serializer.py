@@ -3,14 +3,28 @@
 from __future__ import annotations
 
 import sys
+import types
 from typing import TYPE_CHECKING, Never
 
 import pytest
 
 from offline_debug import load_traceback, save_traceback
 
+
+def func_to_module_string(func: Callable) -> str:
+    """Convert a function's body into a module string, removing indentation."""
+    import inspect
+    import textwrap
+
+    source = inspect.getsource(func)
+    # Get the body of the function (skip the def line)
+    lines = source.splitlines()
+    body = "\n".join(lines[1:])
+    return textwrap.dedent(body)
+
+
 if TYPE_CHECKING:
-    import types
+    from collections.abc import Callable
     from pathlib import Path
 
 
@@ -205,6 +219,10 @@ def test_unpicklable_locals_verification(tmp_path: Path) -> None:
     assert "<unpicklable Unpicklable: <Unpicklable Object>>" in f.f_locals["_obj"]
 
 
+GLOBAL_TEST_VAL = "I am global"
+GLOBAL_VAR = "initial"
+
+
 def test_global_variables_in_stack(tmp_path: Path) -> None:
     """Test that global variables are preserved in the stack."""
     dump_file = tmp_path / "globals.dump"
@@ -235,7 +253,48 @@ def test_global_variables_in_stack(tmp_path: Path) -> None:
     assert f.f_globals["GLOBAL_TEST_VAL"] == "I am global"
 
 
-GLOBAL_TEST_VAL = "I am global"
+def test_globals_changing_between_frames(tmp_path: Path) -> None:
+    """Test that globals are captured per-frame for different modules."""
+    dump_file = tmp_path / "globals_changing.dump"
+
+    # Define the second module's content inside a function
+    def module2_content() -> None:
+        GLOBAL_VAR = "initial"  # noqa: N806, F841
+
+        def level_2() -> Never:
+            global GLOBAL_VAR
+            GLOBAL_VAR = "changed"
+            msg = "Error at level 2"
+            raise ValueError(msg)
+
+    mod2_code = func_to_module_string(module2_content)
+    mod2 = types.ModuleType("mod2")
+    exec(mod2_code, mod2.__dict__)  # noqa: S102
+
+    def level_1() -> None:
+        try:
+            mod2.level_2()
+        except Exception as e:  # noqa: BLE001
+            save_traceback(e, str(dump_file))
+
+    level_1()
+
+    with pytest.raises(ValueError, match="Error at level 2") as exc_info:
+        load_traceback(str(dump_file))
+
+    tb = exc_info.tb
+    frames = []
+    while tb:
+        frames.append(tb.tb_frame)
+        tb = tb.tb_next
+
+    l1_f = next(f for f in frames if f.f_code.co_name == "level_1")
+    l2_f = next(f for f in frames if f.f_code.co_name == "level_2")
+
+    # mod2.level_2 changed its OWN GLOBAL_VAR.
+    # level_1's globals (this module) should NOT have GLOBAL_VAR (or it should be different)
+    assert l2_f.f_globals["GLOBAL_VAR"] == "changed"
+    assert "GLOBAL_VAR" not in l1_f.f_globals or l1_f.f_globals["GLOBAL_VAR"] == "initial"
 
 
 def test_unpicklable_exception_coverage(tmp_path: Path) -> None:
