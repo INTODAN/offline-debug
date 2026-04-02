@@ -1,6 +1,6 @@
 from pathlib import Path
 from dataclasses import dataclass
-from typing import Optional, List, Any, Dict, Never
+from typing import Optional, List, Any, Dict, Never, cast
 import pickle
 import marshal
 import types
@@ -54,11 +54,12 @@ class _PyFrameObject(ctypes.Structure):
     ]
 
 
-def _get_stack_depth(frame):
+def _get_stack_depth(frame: types.FrameType) -> int:
     depth = 0
-    while frame:
+    curr: Optional[types.FrameType] = frame
+    while curr:
         depth += 1
-        frame = frame.f_back
+        curr = curr.f_back
     return depth
 
 
@@ -77,7 +78,7 @@ def _filter_dict(d: dict) -> dict:
 
 
 def _serialize_exc_data(exc: BaseException) -> _ExceptionData:
-    tb_frames = []
+    tb_frames: List[_FrameData] = []
     curr_tb = exc.__traceback__
     while curr_tb:
         f = curr_tb.tb_frame
@@ -116,16 +117,17 @@ def save_traceback(exc: Exception, file_path: str | Path):
 
 
 def _reconstruct_exc_data(data: _ExceptionData) -> Exception:
-    exc = pickle.loads(data.exc_pickle)
+    exc = cast(Exception, pickle.loads(data.exc_pickle))
 
     tstate = _py_thread_state_get()
 
-    reconstructed_frames = []
-    prev_frame = None
+    reconstructed_frames: List[tuple[types.FrameType, _FrameData]] = []
+    prev_frame: Optional[types.FrameType] = None
     for f_data in data.tb_frames:
         code = marshal.loads(f_data.code)
 
-        frame = _py_frame_new(tstate, code, f_data.globals, {})
+        # PyFrame_New returns a new reference to a PyFrameObject
+        frame = cast(types.FrameType, _py_frame_new(tstate, code, f_data.globals, {}))
 
         if f_data.locals:
             frame.f_locals.update(f_data.locals)
@@ -137,7 +139,7 @@ def _reconstruct_exc_data(data: _ExceptionData) -> Exception:
         reconstructed_frames.append((frame, f_data))
         prev_frame = frame
 
-    tb_next = None
+    tb_next: Optional[types.TracebackType] = None
     for frame, f_data in reversed(reconstructed_frames):
         tb = types.TracebackType(
             tb_next=tb_next,
@@ -160,12 +162,12 @@ def _reconstruct_exc_data(data: _ExceptionData) -> Exception:
 def load_traceback(file_path: str | Path) -> Never:
     """Load an exception and its traceback from a file and raise it."""
     with open(file_path, "rb") as f:
-        data = pickle.load(f)
+        data = cast(_ExceptionData, pickle.load(f))
 
     exc = _reconstruct_exc_data(data)
 
-    current_frames = []
-    curr = sys._getframe(1)
+    current_frames: List[types.FrameType] = []
+    curr: Optional[types.FrameType] = sys._getframe(1)
     while curr:
         current_frames.append(curr)
         curr = curr.f_back
@@ -177,7 +179,7 @@ def load_traceback(file_path: str | Path) -> Never:
         frame_ptr = _PyFrameObject.from_address(id(reconstructed_outer))
         frame_ptr.f_back = id(caller_frame)
 
-    tb_chain = exc.__traceback__
+    tb_chain: Optional[types.TracebackType] = exc.__traceback__
     for frame in current_frames:
         tb_chain = types.TracebackType(
             tb_next=tb_chain,
@@ -188,4 +190,3 @@ def load_traceback(file_path: str | Path) -> Never:
 
     exc = exc.with_traceback(tb_chain)
     raise exc
-
