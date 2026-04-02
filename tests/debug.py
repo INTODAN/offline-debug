@@ -25,13 +25,10 @@ def failure() -> None:
         except ValueError as e:
             save_traceback(e, dump_file)
 
+        global global_variable
+        global_variable += 1
         load_traceback(dump_file)
 
 
 if __name__ == "__main__":
-    try:
-        failure()
-    except ValueError:
-        import traceback
-
-        traceback.print_exc()
+    failure()
