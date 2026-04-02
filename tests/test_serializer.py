@@ -382,3 +382,58 @@ def test_reconstruct_invalid_frame_type(monkeypatch) -> None:
 
     with pytest.raises(TypeError, match=r"Expected types.FrameType, but got str"):
         _reconstruct_exc_data(data)
+
+
+def test_get_f_back_offset_logic() -> None:
+    """Test the dynamic f_back offset discovery logic directly."""
+    from offline_debug.serializer import _get_f_back_offset
+
+    offset = _get_f_back_offset()
+    # It should either find an offset or be None (if platform is weird)
+    # But on standard CPython it should find something.
+    assert offset is None or (offset > 0 and offset % 8 == 0)
+
+
+def test_link_frame_no_offset(monkeypatch) -> None:
+    """Test that _link_frame does nothing when offset is None."""
+    import offline_debug.serializer as ser
+
+    monkeypatch.setattr(ser, "_F_BACK_OFFSET", None)
+
+    f = sys._getframe()
+    # Should not raise
+    ser._link_frame(f, f)
+
+
+def test_reconstructed_frames_have_f_back(tmp_path: Path) -> None:
+    """
+    Test that reconstructed frames have their f_back pointers correctly linked.
+
+    This test is currently expected to FAIL because f_back linking was removed
+    to avoid segmentation faults, but it's required for full fidelity.
+    """
+    dump_file = tmp_path / "f_back_fidelity.dump"
+
+    def level_2() -> Never:
+        msg = "Fidelity error"
+        raise ValueError(msg)
+
+    def level_1() -> None:
+        try:
+            level_2()
+        except Exception as e:  # noqa: BLE001
+            save_traceback(e, str(dump_file))
+
+    level_1()
+
+    with pytest.raises(ValueError, match="Fidelity error") as exc_info:
+        load_traceback(str(dump_file))
+
+    frames = get_frames(exc_info.tb)
+    # Traceback frames are ordered TOP to BOTTOM (outer to inner)
+    # We want to check that level_2's frame points back to level_1
+    l2_f = next(f for f in frames if f.f_code.co_name == "level_2")
+    l1_f = next(f for f in frames if f.f_code.co_name == "level_1")
+
+    assert l2_f.f_back is not None, "level_2.f_back should not be None"
+    assert l2_f.f_back is l1_f, "level_2.f_back should point to level_1"
