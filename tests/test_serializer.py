@@ -331,5 +331,5 @@ def test_reconstruct_invalid_frame_type(monkeypatch) -> None:
         ],
     )
 
-    with pytest.raises(TypeError, match="Expected types.FrameType, but got str"):
+    with pytest.raises(TypeError, match=r"Expected types.FrameType, but got str"):
         _reconstruct_exc_data(data)
