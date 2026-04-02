@@ -9,7 +9,7 @@ import sys
 import types
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Never, cast
+from typing import Any, Never
 
 # Define C API for frame creation
 _py_frame_new = ctypes.pythonapi.PyFrame_New
@@ -27,7 +27,7 @@ _py_thread_state_get.restype = ctypes.c_void_p
 # Internal attributes that are either unpicklable or redundant in a new process.
 # We exclude these specifically because they are automatically recreated
 # when the new frame is initialized or when the module is imported.
-_INTERNAL_ATTRIBUTES = ("__builtins__", "__doc__", "__loader__", "__package__", "__spec__")
+_INTERNAL_ATTRIBUTES_TO_SKIP = ("__builtins__", "__doc__", "__loader__", "__package__", "__spec__")
 
 
 @dataclass
@@ -52,15 +52,22 @@ class _ExceptionData:
     context: _ExceptionData | None = None
 
 
-# Define ctypes structure to access f_back in PyFrameObject
-class _PyObject(ctypes.Structure):
-    _fields_ = [("ob_refcnt", ctypes.c_ssize_t), ("ob_type", ctypes.c_void_p)]
-
-
 class _PyFrameObject(ctypes.Structure):
+    """
+    CPython's internal representation of a stack frame (PyFrameObject).
+
+    We use this structure to manually link reconstructed frames by modifying
+    the f_back pointer, which Python's high-level API does not allow.
+    """
+
     _fields_ = [
-        ("ob_base", _PyObject),
-        ("f_back", ctypes.c_void_p),  # Pointer to previous frame
+        # Memory offset to skip the PyObject header (ob_refcnt and ob_type).
+        # This is necessary so that ctypes knows the exact position of f_back in memory.
+        (
+            "offset_buffer",
+            ctypes.c_byte * (ctypes.sizeof(ctypes.c_ssize_t) + ctypes.sizeof(ctypes.c_void_p)),
+        ),
+        ("f_back", ctypes.c_void_p),  # Pointer to the previous frame in the call stack.
     ]
 
 
@@ -78,7 +85,7 @@ def _filter_dict(d: dict) -> dict:
     """Filter dictionary to include only picklable items."""
     result = {}
     for k, v in d.items():
-        if k in _INTERNAL_ATTRIBUTES:
+        if k in _INTERNAL_ATTRIBUTES_TO_SKIP:
             continue
         try:
             # We must verify if the value is picklable because many globals
@@ -132,8 +139,22 @@ def save_traceback(exc: BaseException, file_path: str | Path) -> None:
 
 
 def _reconstruct_exc_data(data: _ExceptionData) -> BaseException:
-    """Recursively reconstruct an exception from its serialized data."""
-    exc = cast("BaseException", pickle.loads(data.exc_pickle))  # noqa: S301
+    """
+    Recursively reconstruct an exception from its serialized data.
+
+    Note on Python Locals:
+    Python uses two ways to store local variables:
+    1. "Slow" locals: A dictionary used for module-level code and class definitions.
+    2. "Fast" locals: A fixed-size array used for functions. This is faster than
+       dictionary lookups because variables are accessed by index.
+
+    During reconstruction, we must explicitly synchronize these because PyFrame_New
+    does not automatically populate the "fast" locals array from a dictionary.
+    """
+    exc = pickle.loads(data.exc_pickle)  # noqa: S301
+    if not isinstance(exc, BaseException):
+        msg = f"Expected BaseException, but got {type(exc).__name__}"
+        raise TypeError(msg)
 
     tstate = _py_thread_state_get()
 
@@ -142,8 +163,13 @@ def _reconstruct_exc_data(data: _ExceptionData) -> BaseException:
     for f_data in data.tb_frames:
         code = marshal.loads(f_data.code)  # noqa: S302
 
-        # PyFrame_New returns a new reference to a PyFrameObject
-        frame = cast("types.FrameType", _py_frame_new(tstate, code, f_data.globals, {}))
+        # PyFrame_New returns a new reference to a PyFrameObject.
+        # We pass empty locals and update them afterward because PyFrame_New
+        # does not correctly initialize "fast" locals from a dictionary.
+        frame = _py_frame_new(tstate, code, f_data.globals, {})
+        if not isinstance(frame, types.FrameType):
+            msg = f"Expected types.FrameType, but got {type(frame).__name__}"
+            raise TypeError(msg)
 
         if f_data.locals:
             frame.f_locals.update(f_data.locals)
@@ -181,7 +207,11 @@ def _reconstruct_exc_data(data: _ExceptionData) -> BaseException:
 def load_traceback(file_path: str | Path) -> Never:
     """Load an exception and its traceback from a file and raise it."""
     with Path(file_path).open("rb") as f:
-        data = cast("_ExceptionData", pickle.load(f))  # noqa: S301
+        data = pickle.load(f)  # noqa: S301
+
+    if not isinstance(data, _ExceptionData):
+        msg = f"Expected _ExceptionData, but got {type(data).__name__}"
+        raise TypeError(msg)
 
     exc = _reconstruct_exc_data(data)
 
