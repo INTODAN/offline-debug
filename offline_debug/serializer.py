@@ -1,6 +1,7 @@
+from __future__ import annotations
 from pathlib import Path
 from dataclasses import dataclass
-from typing import Optional, List, Any, Dict, Never, cast
+from typing import List, Any, Dict, Never, cast
 import pickle
 import marshal
 import types
@@ -20,7 +21,9 @@ _py_frame_new.restype = ctypes.py_object
 _py_thread_state_get = ctypes.pythonapi.PyThreadState_Get
 _py_thread_state_get.restype = ctypes.c_void_p
 
-# Constants for serialization
+# Internal attributes that are either unpicklable or redundant in a new process.
+# We exclude these specifically because they are automatically recreated 
+# when the new frame is initialized or when the module is imported.
 _INTERNAL_ATTRIBUTES = ("__builtins__", "__doc__", "__loader__", "__package__", "__spec__")
 
 
@@ -38,8 +41,8 @@ class _FrameData:
 class _ExceptionData:
     exc_pickle: bytes
     tb_frames: List[_FrameData]
-    cause: Optional["_ExceptionData"] = None
-    context: Optional["_ExceptionData"] = None
+    cause: _ExceptionData | None = None
+    context: _ExceptionData | None = None
 
 
 # Define ctypes structure to access f_back in PyFrameObject
@@ -56,7 +59,7 @@ class _PyFrameObject(ctypes.Structure):
 
 def _get_stack_depth(frame: types.FrameType) -> int:
     depth = 0
-    curr: Optional[types.FrameType] = frame
+    curr: types.FrameType | None = frame
     while curr:
         depth += 1
         curr = curr.f_back
@@ -70,6 +73,9 @@ def _filter_dict(d: dict) -> dict:
         if k in _INTERNAL_ATTRIBUTES:
             continue
         try:
+            # We must verify if the value is picklable because many globals 
+            # (like open file handles, database connections, or modules) 
+            # cannot be saved to disk.
             pickle.dumps(v)
             result[k] = v
         except Exception:
@@ -122,7 +128,7 @@ def _reconstruct_exc_data(data: _ExceptionData) -> Exception:
     tstate = _py_thread_state_get()
 
     reconstructed_frames: List[tuple[types.FrameType, _FrameData]] = []
-    prev_frame: Optional[types.FrameType] = None
+    prev_frame: types.FrameType | None = None
     for f_data in data.tb_frames:
         code = marshal.loads(f_data.code)
 
@@ -132,6 +138,9 @@ def _reconstruct_exc_data(data: _ExceptionData) -> Exception:
         if f_data.locals:
             frame.f_locals.update(f_data.locals)
 
+        # Stitch the frames together to reconstruct the full stack trace.
+        # This allows tools like pdb or IDE debuggers to navigate up and down 
+        # the reconstructed stack.
         if prev_frame:
             frame_ptr = _PyFrameObject.from_address(id(frame))
             frame_ptr.f_back = id(prev_frame)
@@ -139,7 +148,7 @@ def _reconstruct_exc_data(data: _ExceptionData) -> Exception:
         reconstructed_frames.append((frame, f_data))
         prev_frame = frame
 
-    tb_next: Optional[types.TracebackType] = None
+    tb_next: types.TracebackType | None = None
     for frame, f_data in reversed(reconstructed_frames):
         tb = types.TracebackType(
             tb_next=tb_next,
@@ -167,7 +176,7 @@ def load_traceback(file_path: str | Path) -> Never:
     exc = _reconstruct_exc_data(data)
 
     current_frames: List[types.FrameType] = []
-    curr: Optional[types.FrameType] = sys._getframe(1)
+    curr: types.FrameType | None = sys._getframe(1)
     while curr:
         current_frames.append(curr)
         curr = curr.f_back
@@ -179,7 +188,7 @@ def load_traceback(file_path: str | Path) -> Never:
         frame_ptr = _PyFrameObject.from_address(id(reconstructed_outer))
         frame_ptr.f_back = id(caller_frame)
 
-    tb_chain: Optional[types.TracebackType] = exc.__traceback__
+    tb_chain: types.TracebackType | None = exc.__traceback__
     for frame in current_frames:
         tb_chain = types.TracebackType(
             tb_next=tb_chain,
