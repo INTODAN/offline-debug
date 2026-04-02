@@ -9,7 +9,7 @@ import sys
 import types
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Never
+from typing import Any, ClassVar, Never
 
 # Define C API for frame creation
 _py_frame_new = ctypes.pythonapi.PyFrame_New
@@ -60,7 +60,7 @@ class _PyFrameObject(ctypes.Structure):
     the f_back pointer, which Python's high-level API does not allow.
     """
 
-    _fields_ = [
+    _fields_: ClassVar[list[tuple[str, Any]]] = [
         # Memory offset to skip the PyObject header (ob_refcnt and ob_type).
         # This is necessary so that ctypes knows the exact position of f_back in memory.
         (
