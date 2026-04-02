@@ -268,3 +268,21 @@ def test_typing_never() -> None:
 
     load_traceback_annotations = typing.get_type_hints(load_traceback)
     assert load_traceback_annotations["return"] is typing.Never
+
+
+def test_load_invalid_object(tmp_path: Path) -> None:
+    """Test that load_traceback raises TypeError when loading an invalid object."""
+    import pickle
+
+    dump_file = tmp_path / "invalid.dump"
+    with dump_file.open("wb") as f:
+        pickle.dump("not an ExceptionData object", f)
+
+    with pytest.raises(TypeError, match="Expected _ExceptionData, but got str"):
+        load_traceback(str(dump_file))
+
+
+def test_load_non_existent_file() -> None:
+    """Test that load_traceback raises FileNotFoundError when the file does not exist."""
+    with pytest.raises(FileNotFoundError):
+        load_traceback("non_existent_file.dump")
