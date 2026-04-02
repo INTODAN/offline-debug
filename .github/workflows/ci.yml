@@ -17,7 +17,7 @@ jobs:
         uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
-          python-version: "3.13"
+          python-version: "3.12"
       - name: Ruff Format Check
         run: uv run ruff format --check .
       - name: Ruff Lint Check
@@ -34,7 +34,7 @@ jobs:
         uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
-          python-version: "3.13"
+          python-version: "3.12"
       - name: Run tests with Pytest and 100% Coverage
         run: uv run python -m pytest --cov=offline_debug --cov-report=term-missing --cov-fail-under=100
 
