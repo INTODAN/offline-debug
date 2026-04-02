@@ -1,3 +1,5 @@
-from .serializer import save_traceback, load_traceback
+"""Tool for serializing and reconstructing Python exceptions with full stack traces."""
 
-__all__ = ["save_traceback", "load_traceback"]
+from .serializer import load_traceback, save_traceback
+
+__all__ = ["load_traceback", "save_traceback"]
