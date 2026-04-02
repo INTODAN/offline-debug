@@ -7,8 +7,10 @@ from pathlib import Path
 
 from offline_debug import save_traceback, load_traceback
 
+global_variable = 1
 
 def failure():
+    global global_variable
     def exception_raising_func() -> None:
         local = "local"
         raise ValueError(f"exception {local}")
@@ -18,6 +20,7 @@ def failure():
             exception_raising_func()
         except ValueError as e:
             save_traceback(e, Path(tmpdir) / "traceback.dump")
+        global_variable += 1
         load_traceback(Path(tmpdir) / "traceback.dump")
 
 
