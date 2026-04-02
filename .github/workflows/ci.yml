@@ -7,33 +7,39 @@ on:
     branches: ['**']
 
 jobs:
-  test:
-    name: Lint and Test
+  lint:
+    name: Lint and Type Check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - name: Install uv
         uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
           python-version: "3.13"
-
       - name: Ruff Format Check
         run: uv run ruff format --check .
-
       - name: Ruff Lint Check
         run: uv run ruff check .
-
       - name: Type Check with Ty
-        run: uv run ty check .
+        run: uv run ty .
 
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          python-version: "3.13"
       - name: Run tests with Pytest and 100% Coverage
         run: uv run python -m pytest --cov=offline_debug --cov-report=term-missing --cov-fail-under=100
 
   build:
     name: Build Check
-    needs: test
+    needs: [lint, test]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -49,7 +55,7 @@ jobs:
 
   tag:
     name: Auto-tag on Merge
-    needs: [test, build]
+    needs: [lint, test, build]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
