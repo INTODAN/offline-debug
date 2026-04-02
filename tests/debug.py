@@ -1,28 +1,37 @@
-"""
-Intended for manual use, run the test in debug mode and view the exceptions and the function's locals
-"""
+"""Intended for manual use, run the test in debug mode and view the exceptions."""
+
+from __future__ import annotations
 
 import tempfile
 from pathlib import Path
 
-from offline_debug import save_traceback, load_traceback
+from offline_debug.serializer import load_traceback, save_traceback
 
 global_variable = 1
 
-def failure():
-    global global_variable
+
+def failure() -> None:
+    """Raise a nested exception for testing."""
+
     def exception_raising_func() -> None:
         local = "local"
-        raise ValueError(f"exception {local}")
+        msg = f"exception {local}"
+        raise ValueError(msg)
 
     with tempfile.TemporaryDirectory() as tmpdir:
+        dump_file = Path(tmpdir) / "exception.dump"
         try:
             exception_raising_func()
         except ValueError as e:
-            save_traceback(e, Path(tmpdir) / "traceback.dump")
-        global_variable += 1
-        load_traceback(Path(tmpdir) / "traceback.dump")
+            save_traceback(e, dump_file)
+
+        load_traceback(dump_file)
 
 
 if __name__ == "__main__":
-    failure()
+    try:
+        failure()
+    except ValueError:
+        import traceback
+
+        traceback.print_exc()

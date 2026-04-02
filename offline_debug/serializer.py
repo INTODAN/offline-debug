@@ -1,12 +1,15 @@
+"""Functions for serializing and reconstructing exceptions with their tracebacks."""
+
 from __future__ import annotations
-from pathlib import Path
-from dataclasses import dataclass
-from typing import List, Any, Dict, Never, cast
-import pickle
-import marshal
-import types
+
 import ctypes
+import marshal
+import pickle
 import sys
+import types
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Never, cast
 
 # Define C API for frame creation
 _py_frame_new = ctypes.pythonapi.PyFrame_New
@@ -22,16 +25,18 @@ _py_thread_state_get = ctypes.pythonapi.PyThreadState_Get
 _py_thread_state_get.restype = ctypes.c_void_p
 
 # Internal attributes that are either unpicklable or redundant in a new process.
-# We exclude these specifically because they are automatically recreated 
+# We exclude these specifically because they are automatically recreated
 # when the new frame is initialized or when the module is imported.
 _INTERNAL_ATTRIBUTES = ("__builtins__", "__doc__", "__loader__", "__package__", "__spec__")
 
 
 @dataclass
 class _FrameData:
+    """Serialized data for a single stack frame."""
+
     code: bytes
-    globals: Dict[str, Any]
-    locals: Dict[str, Any]
+    globals: dict[str, Any]
+    locals: dict[str, Any]
     lasti: int
     lineno: int
     stack_depth: int
@@ -39,8 +44,10 @@ class _FrameData:
 
 @dataclass
 class _ExceptionData:
+    """Serialized data for an exception and its traceback."""
+
     exc_pickle: bytes
-    tb_frames: List[_FrameData]
+    tb_frames: list[_FrameData]
     cause: _ExceptionData | None = None
     context: _ExceptionData | None = None
 
@@ -58,6 +65,7 @@ class _PyFrameObject(ctypes.Structure):
 
 
 def _get_stack_depth(frame: types.FrameType) -> int:
+    """Calculate the depth of the current stack frame."""
     depth = 0
     curr: types.FrameType | None = frame
     while curr:
@@ -73,18 +81,19 @@ def _filter_dict(d: dict) -> dict:
         if k in _INTERNAL_ATTRIBUTES:
             continue
         try:
-            # We must verify if the value is picklable because many globals 
-            # (like open file handles, database connections, or modules) 
+            # We must verify if the value is picklable because many globals
+            # (like open file handles, database connections, or modules)
             # cannot be saved to disk.
             pickle.dumps(v)
             result[k] = v
-        except Exception:
-            result[k] = f"<unpicklable {type(v).__name__}: {repr(v)}>"
+        except Exception:  # noqa: BLE001
+            result[k] = f"<unpicklable {type(v).__name__}: {v!r}>"
     return result
 
 
 def _serialize_exc_data(exc: BaseException) -> _ExceptionData:
-    tb_frames: List[_FrameData] = []
+    """Recursively serialize exception data into dataclasses."""
+    tb_frames: list[_FrameData] = []
     curr_tb = exc.__traceback__
     while curr_tb:
         f = curr_tb.tb_frame
@@ -102,9 +111,9 @@ def _serialize_exc_data(exc: BaseException) -> _ExceptionData:
 
     try:
         exc_pickle = pickle.dumps(exc)
-    except Exception:
+    except Exception:  # noqa: BLE001
         exc_pickle = pickle.dumps(
-            RuntimeError(f"Unpicklable exception {type(exc).__name__}: {str(exc)}")
+            RuntimeError(f"Unpicklable exception {type(exc).__name__}: {exc!s}")
         )
 
     return _ExceptionData(
@@ -115,31 +124,32 @@ def _serialize_exc_data(exc: BaseException) -> _ExceptionData:
     )
 
 
-def save_traceback(exc: Exception, file_path: str | Path):
+def save_traceback(exc: BaseException, file_path: str | Path) -> None:
     """Serialize an exception and its traceback to a file."""
     data = _serialize_exc_data(exc)
-    with open(file_path, "wb") as f:
+    with Path(file_path).open("wb") as f:
         pickle.dump(data, f)
 
 
-def _reconstruct_exc_data(data: _ExceptionData) -> Exception:
-    exc = cast(Exception, pickle.loads(data.exc_pickle))
+def _reconstruct_exc_data(data: _ExceptionData) -> BaseException:
+    """Recursively reconstruct an exception from its serialized data."""
+    exc = cast("BaseException", pickle.loads(data.exc_pickle))  # noqa: S301
 
     tstate = _py_thread_state_get()
 
-    reconstructed_frames: List[tuple[types.FrameType, _FrameData]] = []
+    reconstructed_frames: list[tuple[types.FrameType, _FrameData]] = []
     prev_frame: types.FrameType | None = None
     for f_data in data.tb_frames:
-        code = marshal.loads(f_data.code)
+        code = marshal.loads(f_data.code)  # noqa: S302
 
         # PyFrame_New returns a new reference to a PyFrameObject
-        frame = cast(types.FrameType, _py_frame_new(tstate, code, f_data.globals, {}))
+        frame = cast("types.FrameType", _py_frame_new(tstate, code, f_data.globals, {}))
 
         if f_data.locals:
             frame.f_locals.update(f_data.locals)
 
         # Stitch the frames together to reconstruct the full stack trace.
-        # This allows tools like pdb or IDE debuggers to navigate up and down 
+        # This allows tools like pdb or IDE debuggers to navigate up and down
         # the reconstructed stack.
         if prev_frame:
             frame_ptr = _PyFrameObject.from_address(id(frame))
@@ -170,13 +180,13 @@ def _reconstruct_exc_data(data: _ExceptionData) -> Exception:
 
 def load_traceback(file_path: str | Path) -> Never:
     """Load an exception and its traceback from a file and raise it."""
-    with open(file_path, "rb") as f:
-        data = cast(_ExceptionData, pickle.load(f))
+    with Path(file_path).open("rb") as f:
+        data = cast("_ExceptionData", pickle.load(f))  # noqa: S301
 
     exc = _reconstruct_exc_data(data)
 
-    current_frames: List[types.FrameType] = []
-    curr: types.FrameType | None = sys._getframe(1)
+    current_frames: list[types.FrameType] = []
+    curr: types.FrameType | None = sys._getframe(1)  # noqa: SLF001
     while curr:
         current_frames.append(curr)
         curr = curr.f_back

@@ -15,6 +15,31 @@ dependencies = [
 Homepage = "https://github.com/INTODAN/offline-debug"
 Repository = "https://github.com/INTODAN/offline-debug"
 
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    "D203", # One blank line before class
+    "D212", # Multi-line docstring summary should start at the first line
+    "COM812", # Trailing comma missing
+    "PLC0415", # import should be at top of file
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = [
+    "S101", # Use of assert detected
+    "SLF001", # Private member accessed
+    "D103", # Missing docstring in public function
+    "ANN201", # Missing return type annotation for public function
+    "ANN001", # Missing type annotation for function argument
+    "PLW0603", # Using the global statement
+    "TRY003", # Avoid specifying long messages outside the exception class
+    "EM101", # Exception must not use a string literal
+]
+
 [build-system]
 requires = ["uv_build"]
 build-backend = "uv_build"

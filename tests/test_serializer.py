@@ -1,48 +1,57 @@
-import pytest
+"""Tests for the serializer module."""
+
+from __future__ import annotations
+
 import sys
-from offline_debug import save_traceback, load_traceback
+from typing import TYPE_CHECKING, Never
+
+import pytest
+
+from offline_debug import load_traceback, save_traceback
+
+if TYPE_CHECKING:
+    import types
+    from pathlib import Path
 
 
-def get_stack_depth(frame):
+def get_stack_depth(frame: types.FrameType | None) -> int:
+    """Calculate the depth of the given stack frame."""
     depth = 0
-    while frame:
+    curr = frame
+    while curr:
         depth += 1
-        frame = frame.f_back
+        curr = curr.f_back
     return depth
 
 
-def test_stack_depth_preservation(tmp_path):
+def test_stack_depth_preservation(tmp_path: Path) -> None:
+    """Test that the stack depth is preserved during serialization."""
     dump_file = tmp_path / "depth.dump"
 
     original_depths = []
 
-    def level_3():
+    def level_3() -> Never:
         f = sys._getframe()
         original_depths.append(get_stack_depth(f))
-        raise ValueError("Depth error")
+        msg = "Depth error"
+        raise ValueError(msg)
 
-    def level_2():
+    def level_2() -> None:
         f = sys._getframe()
         original_depths.append(get_stack_depth(f))
         level_3()
 
-    def level_1():
+    def level_1() -> None:
         f = sys._getframe()
         original_depths.append(get_stack_depth(f))
         try:
             level_2()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             save_traceback(e, str(dump_file))
 
     level_1()
 
-    # Now load and verify.
-    # To match depth, we need to call from a specific depth OR
-    # just verify that depths are greater than 1 and relatively correct.
-    # The user specifically asked to confirm stack length matches.
-    # This is tricky because the caller stack might differ.
-
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(ValueError, match="Depth error") as exc_info:
         load_traceback(str(dump_file))
 
     tb = exc_info.tb
@@ -60,9 +69,6 @@ def test_stack_depth_preservation(tmp_path):
     d2 = get_stack_depth(l2_f)
     d3 = get_stack_depth(l3_f)
 
-    print(f"Original depths: {original_depths}")
-    print(f"Reconstructed depths: {d1}, {d2}, {d3}")
-
     # At minimum, verify they are linked correctly (depth increases by 1)
     assert d2 == d1 + 1
     assert d3 == d2 + 1
@@ -73,28 +79,30 @@ def test_stack_depth_preservation(tmp_path):
     assert d3 > 1
 
 
-def test_simple_exception_full_stack(tmp_path):
+def test_simple_exception_full_stack(tmp_path: Path) -> None:
+    """Test serialization of a simple exception with a full stack."""
     dump_file = tmp_path / "simple.dump"
 
-    def inner_raise():
+    def inner_raise() -> Never:
         _x = 10
         _y = "hello"
-        raise ValueError("Simple error")
+        msg = "Simple error"
+        raise ValueError(msg)
 
-    def middle_step():
+    def middle_step() -> None:
         inner_raise()
 
-    def capture_it():
+    def capture_it() -> None:
         try:
             middle_step()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             save_traceback(e, str(dump_file))
 
     capture_it()
     assert dump_file.exists()
 
     # Now we call load_traceback from another stack
-    def second_stack_caller():
+    def second_stack_caller() -> None:
         load_traceback(str(dump_file))
 
     with pytest.raises(ValueError, match="Simple error") as exc_info:
@@ -117,21 +125,24 @@ def test_simple_exception_full_stack(tmp_path):
     assert inner_frame.f_back.f_code.co_name == "middle_step"
 
 
-def test_chained_exceptions_stack(tmp_path):
+def test_chained_exceptions_stack(tmp_path: Path) -> None:
+    """Test serialization of chained exceptions."""
     dump_file = tmp_path / "chained.dump"
 
-    def fail_inner():
-        raise KeyError("Inner key error")
+    def fail_inner() -> Never:
+        msg = "Inner key error"
+        raise KeyError(msg)
 
-    def fail_outer():
+    def fail_outer() -> None:
         try:
             fail_inner()
         except KeyError as e:
-            raise RuntimeError("Outer runtime error") from e
+            msg = "Outer runtime error"
+            raise RuntimeError(msg) from e
 
     try:
         fail_outer()
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         save_traceback(e, str(dump_file))
 
     with pytest.raises(RuntimeError, match="Outer runtime error") as exc_info:
@@ -140,11 +151,12 @@ def test_chained_exceptions_stack(tmp_path):
     reconstructed_exc = exc_info.value
     assert isinstance(reconstructed_exc.__cause__, KeyError)
 
-    def get_frames(tb):
+    def get_frames(tb: types.TracebackType | None) -> list[types.FrameType]:
         f = []
-        while tb:
-            f.append(tb.tb_frame)
-            tb = tb.tb_next
+        curr = tb
+        while curr is not None:
+            f.append(curr.tb_frame)
+            curr = curr.tb_next
         return f
 
     outer_frames = get_frames(reconstructed_exc.__traceback__)
@@ -155,26 +167,29 @@ def test_chained_exceptions_stack(tmp_path):
     assert fo_frame.f_back is not None
 
 
-def test_unpicklable_locals_verification(tmp_path):
+def test_unpicklable_locals_verification(tmp_path: Path) -> None:
+    """Test that unpicklable local variables are handled gracefully."""
     dump_file = tmp_path / "unpicklable.dump"
 
     class Unpicklable:
-        def __reduce__(self):
-            raise TypeError("Cannot pickle me")
+        def __reduce__(self) -> Never:
+            msg = "Cannot pickle me"
+            raise TypeError(msg)
 
-        def __repr__(self):
+        def __repr__(self) -> str:
             return "<Unpicklable Object>"
 
-    def fail_with_unpicklable():
+    def fail_with_unpicklable() -> Never:
         _obj = Unpicklable()
-        raise ValueError("Error with unpicklable")
+        msg = "Error with unpicklable"
+        raise ValueError(msg)
 
     try:
         fail_with_unpicklable()
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         save_traceback(e, str(dump_file))
 
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(ValueError, match="Error with unpicklable") as exc_info:
         load_traceback(str(dump_file))
 
     tb = exc_info.tb
@@ -186,23 +201,26 @@ def test_unpicklable_locals_verification(tmp_path):
     frame_names = [f.f_code.co_name for f in frames]
     assert "fail_with_unpicklable" in frame_names
     f = next(f for f in frames if f.f_code.co_name == "fail_with_unpicklable")
+    assert "_obj" in f.f_locals
     assert "<unpicklable Unpicklable: <Unpicklable Object>>" in f.f_locals["_obj"]
 
 
-def test_global_variables_in_stack(tmp_path):
+def test_global_variables_in_stack(tmp_path: Path) -> None:
+    """Test that global variables are preserved in the stack."""
     dump_file = tmp_path / "globals.dump"
 
-    def fail_with_globals():
-        global GLOBAL_TEST_VAL
+    def fail_with_globals() -> None:
+        global GLOBAL_TEST_VAL  # noqa: PLW0602
         if GLOBAL_TEST_VAL == "I am global":
-            raise ValueError("Global test")
+            msg = "Global test"
+            raise ValueError(msg)
 
     try:
         fail_with_globals()
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         save_traceback(e, str(dump_file))
 
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(ValueError, match="Global test") as exc_info:
         load_traceback(str(dump_file))
 
     tb = exc_info.tb
@@ -220,27 +238,33 @@ def test_global_variables_in_stack(tmp_path):
 GLOBAL_TEST_VAL = "I am global"
 
 
-def test_unpicklable_exception_coverage(tmp_path):
+def test_unpicklable_exception_coverage(tmp_path: Path) -> None:
+    """Test that unpicklable exceptions are handled by falling back to RuntimeError."""
     dump_file = tmp_path / "unpicklable_exc.dump"
 
-    class UnpicklableException(Exception):
-        def __reduce__(self):
-            raise TypeError("Cannot pickle me")
+    class UnpicklableError(Exception):
+        def __reduce__(self) -> Never:
+            msg = "Cannot pickle me"
+            raise TypeError(msg)
+
+    def raise_unpicklable() -> Never:
+        msg = "Unpicklable"
+        raise UnpicklableError(msg)
 
     try:
-        raise UnpicklableException("Unpicklable")
-    except Exception as e:
+        raise_unpicklable()
+    except Exception as e:  # noqa: BLE001
         save_traceback(e, str(dump_file))
 
-    with pytest.raises(
-        RuntimeError, match="Unpicklable exception UnpicklableException: Unpicklable"
-    ):
+    with pytest.raises(RuntimeError, match="Unpicklable exception UnpicklableError: Unpicklable"):
         load_traceback(str(dump_file))
 
 
-def test_typing_never():
-    from offline_debug import load_traceback
+def test_typing_never() -> None:
+    """Test that load_traceback is correctly annotated with Never."""
     import typing
 
-    annotations = typing.get_type_hints(load_traceback)
-    assert annotations["return"] is typing.Never
+    from offline_debug import load_traceback
+
+    load_traceback_annotations = typing.get_type_hints(load_traceback)
+    assert load_traceback_annotations["return"] is typing.Never
