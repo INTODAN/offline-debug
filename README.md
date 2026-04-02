@@ -1,5 +1,11 @@
 # Traceback Serializer Project (`offline-debug`)
 
+[![PyPI version](https://img.shields.io/pypi/v/offline-debug.svg)](https://pypi.org/project/offline-debug/)
+[![Tests](https://github.com/INTODAN/offline-debug/actions/workflows/ci.yml/badge.svg)](https://github.com/INTODAN/offline-debug/actions)
+[![Coverage](https://img.shields.io/badge/coverage-100%25-brightgreen.svg)](https://github.com/INTODAN/offline-debug)
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+[![Ty checked](https://img.shields.io/badge/ty-checked-blue.svg)](https://github.com/intodan/ty)
+
 ## Overview
 A Python package for high-fidelity serialization and deserialization of exceptions and their complete tracebacks. Unlike other solutions, `offline-debug` reconstructs **actual** `types.FrameType` objects using the Python C API, ensuring that re-raised exceptions look and feel genuine to debuggers and introspection tools.
 

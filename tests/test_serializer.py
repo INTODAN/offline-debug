@@ -286,3 +286,50 @@ def test_load_non_existent_file() -> None:
     """Test that load_traceback raises FileNotFoundError when the file does not exist."""
     with pytest.raises(FileNotFoundError):
         load_traceback("non_existent_file.dump")
+
+
+def test_reconstruct_invalid_exception_type() -> None:
+    """Test that _reconstruct_exc_data raises TypeError when the pickled exception is invalid."""
+    # Create dummy data with a string instead of a pickled exception
+    import pickle
+
+    from offline_debug.serializer import _ExceptionData, _reconstruct_exc_data
+
+    data = _ExceptionData(
+        exc_pickle=pickle.dumps("not an exception"),
+        tb_frames=[],
+    )
+
+    with pytest.raises(TypeError, match="Expected BaseException, but got str"):
+        _reconstruct_exc_data(data)
+
+
+def test_reconstruct_invalid_frame_type(monkeypatch) -> None:
+    """Test that _reconstruct_exc_data raises TypeError when frame creation fails."""
+    from offline_debug.serializer import _ExceptionData, _FrameData, _reconstruct_exc_data
+
+    # Mock _py_frame_new to return something that is not a FrameType
+    monkeypatch.setattr("offline_debug.serializer._py_frame_new", lambda *_: "not a frame")
+
+    import marshal
+    import pickle
+
+    def dummy() -> None:
+        pass
+
+    data = _ExceptionData(
+        exc_pickle=pickle.dumps(ValueError("test")),
+        tb_frames=[
+            _FrameData(
+                code=marshal.dumps(dummy.__code__),
+                globals={},
+                locals={},
+                lasti=0,
+                lineno=0,
+                stack_depth=0,
+            )
+        ],
+    )
+
+    with pytest.raises(TypeError, match="Expected types.FrameType, but got str"):
+        _reconstruct_exc_data(data)
