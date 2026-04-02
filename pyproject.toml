@@ -1,6 +1,6 @@
 [project]
 name = "offline-debug"
-version = "0.1.0"
+version = "0.1.0-beta1"
 description = "Debug exceptions offline by saving them to a dump and raising them at a later point."
 authors = [
     { name = "Itai Elidan", email = "itaielidan@gmail.com" }

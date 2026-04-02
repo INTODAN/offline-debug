@@ -49,31 +49,35 @@ jobs:
       - name: Build package
         run: uv build
 
-  tag:
-    name: Auto-tag on Merge
-    needs: [lint, test, build]
+  release:
+    name: Tag and Publish
+    needs: [build]
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     environment: release
     permissions:
       contents: write
-    outputs:
-      created: ${{ steps.create_tag.outputs.created }}
+      id-token: write
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+      
       - name: Get version from pyproject.toml
         id: get_version
         run: |
           VERSION=$(grep -m 1 '^version = ' pyproject.toml | cut -d '"' -f 2)
           echo "version=$VERSION" >> $GITHUB_OUTPUT
+      
       - name: Create Tag
         id: create_tag
         run: |
           TAG_NAME="v${{ steps.get_version.outputs.version }}"
           if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
-            echo "Tag $TAG_NAME already exists. Skipping."
+            echo "Tag $TAG_NAME already exists. We will only publish if this is a manual trigger."
             echo "created=false" >> $GITHUB_OUTPUT
           else
             git config user.name "github-actions[bot]"
@@ -83,19 +87,12 @@ jobs:
             echo "created=true" >> $GITHUB_OUTPUT
           fi
 
-  publish:
-    name: Publish to PyPI
-    needs: [tag, build]
-    if: github.ref == 'refs/heads/main' && (needs.tag.outputs.created == 'true' || github.event_name == 'workflow_dispatch')
-    runs-on: ubuntu-latest
-    environment: release
-    permissions:
-      id-token: write
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install uv
-        uses: astral-sh/setup-uv@v5
-      - name: Build package
-        run: uv build
-      - name: Publish to PyPI
+      - name: Build and Publish to PyPI
+        if: steps.create_tag.outputs.created == 'true' || github.event_name == 'workflow_dispatch'
+        run: |
+          uv build
+          # The pypa action is preferred for the final step to handle OIDC
+        
+      - name: Publish package
+        if: steps.create_tag.outputs.created == 'true' || github.event_name == 'workflow_dispatch'
         uses: pypa/gh-action-pypi-publish@release/v1
