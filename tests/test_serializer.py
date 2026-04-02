@@ -220,6 +220,22 @@ def test_global_variables_in_stack(tmp_path):
 GLOBAL_TEST_VAL = "I am global"
 
 
+def test_unpicklable_exception_coverage(tmp_path):
+    dump_file = tmp_path / "unpicklable_exc.dump"
+
+    class UnpicklableException(Exception):
+        def __reduce__(self):
+            raise TypeError("Cannot pickle me")
+
+    try:
+        raise UnpicklableException("Unpicklable")
+    except Exception as e:
+        save_traceback(e, str(dump_file))
+
+    with pytest.raises(RuntimeError, match="Unpicklable exception UnpicklableException: Unpicklable"):
+        load_traceback(str(dump_file))
+
+
 def test_typing_never():
     from offline_debug import load_traceback
     import typing
