@@ -232,7 +232,9 @@ def test_unpicklable_exception_coverage(tmp_path):
     except Exception as e:
         save_traceback(e, str(dump_file))
 
-    with pytest.raises(RuntimeError, match="Unpicklable exception UnpicklableException: Unpicklable"):
+    with pytest.raises(
+        RuntimeError, match="Unpicklable exception UnpicklableException: Unpicklable"
+    ):
         load_traceback(str(dump_file))
 
 
