@@ -22,7 +22,7 @@ jobs:
       - name: Ruff Lint Check
         run: uv run ruff check .
       - name: Type Check with Ty
-        run: uv run ty .
+        run: uv run ty check .
 
   test:
     name: Run Tests
