@@ -10,6 +10,10 @@ import pytest
 
 from offline_debug import load_traceback, save_traceback
 
+if TYPE_CHECKING:
+    from collections.abc import Callable
+    from pathlib import Path
+
 
 def func_to_module_string(func: Callable) -> str:
     """Convert a function's body into a module string, removing indentation."""
@@ -23,11 +27,6 @@ def func_to_module_string(func: Callable) -> str:
     return textwrap.dedent(body)
 
 
-if TYPE_CHECKING:
-    from collections.abc import Callable
-    from pathlib import Path
-
-
 def get_stack_depth(frame: types.FrameType | None) -> int:
     """Calculate the depth of the given stack frame."""
     depth = 0
@@ -36,6 +35,16 @@ def get_stack_depth(frame: types.FrameType | None) -> int:
         depth += 1
         curr = curr.f_back
     return depth
+
+
+def get_frames(tb: types.TracebackType | None) -> list[types.FrameType]:
+    """Extract all frames from a traceback."""
+    frames = []
+    curr = tb
+    while curr:
+        frames.append(curr.tb_frame)
+        curr = curr.tb_next
+    return frames
 
 
 def test_stack_depth_preservation(tmp_path: Path) -> None:
@@ -68,11 +77,7 @@ def test_stack_depth_preservation(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="Depth error") as exc_info:
         load_traceback(str(dump_file))
 
-    tb = exc_info.tb
-    frames = []
-    while tb:
-        frames.append(tb.tb_frame)
-        tb = tb.tb_next
+    frames = get_frames(exc_info.tb)
 
     # We want to find level_1, level_2, level_3 in the reconstructed traceback
     l1_f = next(f for f in frames if f.f_code.co_name == "level_1")
@@ -122,11 +127,7 @@ def test_simple_exception_full_stack(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="Simple error") as exc_info:
         second_stack_caller()
 
-    tb = exc_info.tb
-    frames = []
-    while tb:
-        frames.append(tb.tb_frame)
-        tb = tb.tb_next
+    frames = get_frames(exc_info.tb)
 
     frame_names = [f.f_code.co_name for f in frames]
     assert "inner_raise" in frame_names
@@ -206,11 +207,7 @@ def test_unpicklable_locals_verification(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="Error with unpicklable") as exc_info:
         load_traceback(str(dump_file))
 
-    tb = exc_info.tb
-    frames = []
-    while tb:
-        frames.append(tb.tb_frame)
-        tb = tb.tb_next
+    frames = get_frames(exc_info.tb)
 
     frame_names = [f.f_code.co_name for f in frames]
     assert "fail_with_unpicklable" in frame_names
@@ -241,11 +238,7 @@ def test_global_variables_in_stack(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="Global test") as exc_info:
         load_traceback(str(dump_file))
 
-    tb = exc_info.tb
-    frames = []
-    while tb:
-        frames.append(tb.tb_frame)
-        tb = tb.tb_next
+    frames = get_frames(exc_info.tb)
 
     frame_names = [f.f_code.co_name for f in frames]
     assert "fail_with_globals" in frame_names
@@ -282,11 +275,7 @@ def test_globals_changing_between_frames(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="Error at level 2") as exc_info:
         load_traceback(str(dump_file))
 
-    tb = exc_info.tb
-    frames = []
-    while tb:
-        frames.append(tb.tb_frame)
-        tb = tb.tb_next
+    frames = get_frames(exc_info.tb)
 
     l1_f = next(f for f in frames if f.f_code.co_name == "level_1")
     l2_f = next(f for f in frames if f.f_code.co_name == "level_2")
