@@ -3,7 +3,6 @@ name: CI
 on:
   push:
     branches: ['**']
-    tags: ['v*']
   pull_request:
     branches: ['**']
 
@@ -27,7 +26,7 @@ jobs:
         run: uv run ruff check .
 
       - name: Type Check with Ty
-        run: uv run ty check .
+        run: uv run ty .
 
       - name: Run tests with Pytest and 100% Coverage
         run: uv run python -m pytest --cov=offline_debug --cov-report=term-missing --cov-fail-under=100
@@ -55,6 +54,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    outputs:
+      created: ${{ steps.create_tag.outputs.created }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -63,24 +64,26 @@ jobs:
         id: get_version
         run: |
           VERSION=$(grep -m 1 '^version = ' pyproject.toml | cut -d '"' -f 2)
-          echo "VERSION=$VERSION" >> $GITHUB_ENV
           echo "version=$VERSION" >> $GITHUB_OUTPUT
       - name: Create Tag
+        id: create_tag
         run: |
           TAG_NAME="v${{ steps.get_version.outputs.version }}"
           if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
             echo "Tag $TAG_NAME already exists. Skipping."
+            echo "created=false" >> $GITHUB_OUTPUT
           else
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
             git tag "$TAG_NAME"
             git push origin "$TAG_NAME"
+            echo "created=true" >> $GITHUB_OUTPUT
           fi
 
   publish:
     name: Publish to PyPI
-    needs: [test, build]
-    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [tag, build]
+    if: needs.tag.outputs.created == 'true'
     runs-on: ubuntu-latest
     environment: release
     permissions:
