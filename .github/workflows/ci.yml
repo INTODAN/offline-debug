@@ -52,8 +52,9 @@ jobs:
   tag:
     name: Auto-tag on Merge
     needs: [lint, test, build]
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    environment: release
     permissions:
       contents: write
     outputs:
