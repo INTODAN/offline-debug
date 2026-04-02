@@ -9,7 +9,7 @@ import sys
 import types
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, ClassVar, Never
+from typing import Any, Never
 
 # Define C API for frame creation
 _py_frame_new = ctypes.pythonapi.PyFrame_New
@@ -50,25 +50,6 @@ class _ExceptionData:
     tb_frames: list[_FrameData]
     cause: _ExceptionData | None = None
     context: _ExceptionData | None = None
-
-
-class _PyFrameObject(ctypes.Structure):
-    """
-    CPython's internal representation of a stack frame (PyFrameObject).
-
-    We use this structure to manually link reconstructed frames by modifying
-    the f_back pointer, which Python's high-level API does not allow.
-    """
-
-    _fields_: ClassVar[list[tuple[str, Any]]] = [
-        # Memory offset to skip the PyObject header (ob_refcnt and ob_type).
-        # This is necessary so that ctypes knows the exact position of f_back in memory.
-        (
-            "offset_buffer",
-            ctypes.c_byte * (ctypes.sizeof(ctypes.c_ssize_t) + ctypes.sizeof(ctypes.c_void_p)),
-        ),
-        ("f_back", ctypes.c_void_p),  # Pointer to the previous frame in the call stack.
-    ]
 
 
 def _get_stack_depth(frame: types.FrameType) -> int:
@@ -159,7 +140,6 @@ def _reconstruct_exc_data(data: _ExceptionData) -> BaseException:
     tstate = _py_thread_state_get()
 
     reconstructed_frames: list[tuple[types.FrameType, _FrameData]] = []
-    prev_frame: types.FrameType | None = None
     for f_data in data.tb_frames:
         code = marshal.loads(f_data.code)  # noqa: S302
 
@@ -174,15 +154,7 @@ def _reconstruct_exc_data(data: _ExceptionData) -> BaseException:
         if f_data.locals:
             frame.f_locals.update(f_data.locals)
 
-        # Stitch the frames together to reconstruct the full stack trace.
-        # This allows tools like pdb or IDE debuggers to navigate up and down
-        # the reconstructed stack.
-        if prev_frame:
-            frame_ptr = _PyFrameObject.from_address(id(frame))
-            frame_ptr.f_back = id(prev_frame)
-
         reconstructed_frames.append((frame, f_data))
-        prev_frame = frame
 
     tb_next: types.TracebackType | None = None
     for frame, f_data in reversed(reconstructed_frames):
@@ -220,13 +192,6 @@ def load_traceback(file_path: str | Path) -> Never:
     while curr:
         current_frames.append(curr)
         curr = curr.f_back
-
-    if exc.__traceback__ and current_frames:
-        reconstructed_outer = exc.__traceback__.tb_frame
-        caller_frame = current_frames[0]
-
-        frame_ptr = _PyFrameObject.from_address(id(reconstructed_outer))
-        frame_ptr.f_back = id(caller_frame)
 
     tb_chain: types.TracebackType | None = exc.__traceback__
     for frame in current_frames:
