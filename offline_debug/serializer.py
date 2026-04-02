@@ -24,6 +24,12 @@ _py_frame_new.restype = ctypes.py_object
 _py_thread_state_get = ctypes.pythonapi.PyThreadState_Get
 _py_thread_state_get.restype = ctypes.c_void_p
 
+_py_incref = ctypes.pythonapi.Py_IncRef
+_py_incref.argtypes = (ctypes.py_object,)
+
+_py_decref = ctypes.pythonapi.Py_DecRef
+_py_decref.argtypes = (ctypes.py_object,)
+
 
 def _get_f_back_offset() -> int | None:
     """Dynamically discover the memory offset of f_back in PyFrameObject."""
@@ -55,6 +61,9 @@ def _get_f_back_offset() -> int | None:
                     ctypes.c_ssize_t.from_address(id(frame) + offset).value = target_addr
                     # If reading f_back via Python now returns our target, we found it.
                     if frame.f_back is target:
+                        # Success, but we must restore 0 so we don't mess up refcounts
+                        # when 'frame' is eventually garbage collected.
+                        ctypes.c_ssize_t.from_address(id(frame) + offset).value = 0
                         return offset
                     # Restore to 0 if this wasn't the correct offset.
                     ctypes.c_ssize_t.from_address(id(frame) + offset).value = 0
@@ -72,6 +81,11 @@ def _link_frame(frame: types.FrameType, back: types.FrameType) -> None:
     """Link a frame to its parent frame using the discovered offset."""
     if _F_BACK_OFFSET is None:
         return
+
+    # In Python, setting f_back means the child frame now owns a reference
+    # to the parent frame. We must increment the reference count of the
+    # parent to reflect this.
+    _py_incref(back)
 
     # Use ctypes to write the address of the back frame into the discovered offset.
     ptr = ctypes.c_void_p.from_address(id(frame) + _F_BACK_OFFSET)
@@ -198,15 +212,29 @@ def _reconstruct_exc_data(data: _ExceptionData) -> BaseException:
     for f_data in data.tb_frames:
         code = marshal.loads(f_data.code)  # noqa: S302
 
+        # In Python 3.11 and 3.12, accessing f_locals on a frame created via
+        # PyFrame_New for optimized code (functions) causes a segmentation fault
+        # because the internal 'fast' locals array is not initialized.
+        # As a workaround, we create a 'non-optimized' version of the code object
+        # by compiling a dummy string. This ensures the bytecode is safe
+        # (no LOAD_FAST) while preserving metadata like name and filename.
+        if sys.version_info < (3, 13):
+            # A simple module-level code object never has fast locals.
+            dummy_code = compile("", code.co_filename, "exec")
+            code = dummy_code.replace(
+                co_name=code.co_name,
+                co_firstlineno=code.co_firstlineno,
+                co_qualname=code.co_qualname,
+            )
+
         # PyFrame_New returns a new reference to a PyFrameObject.
-        # We pass empty locals and update them afterward because PyFrame_New
-        # does not correctly initialize "fast" locals from a dictionary.
-        frame = _py_frame_new(tstate, code, f_data.globals, {})
+        frame = _py_frame_new(tstate, code, f_data.globals, f_data.locals)
         if not isinstance(frame, types.FrameType):
             msg = f"Expected types.FrameType, but got {type(frame).__name__}"
             raise TypeError(msg)
 
-        if f_data.locals:
+        # In 3.13+, PEP 667 allows safe write-through access to locals.
+        if sys.version_info >= (3, 13) and f_data.locals:
             frame.f_locals.update(f_data.locals)
 
         if prev_frame:

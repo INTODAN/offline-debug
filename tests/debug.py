@@ -2,16 +2,24 @@
 
 from __future__ import annotations
 
+import sys
 import tempfile
 from pathlib import Path
+
+from rich import traceback
+from rich.console import Console
 
 from offline_debug.serializer import load_traceback, save_traceback
 
 global_variable = 1
 
+console = Console(force_terminal=True)
+traceback.install(show_locals=True, console=console)
+
 
 def failure() -> None:
     """Raise a nested exception for testing."""
+    _python_version = sys.version
 
     def exception_raising_func() -> None:
         local = "local"
