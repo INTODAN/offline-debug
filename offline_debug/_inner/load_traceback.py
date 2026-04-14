@@ -1,6 +1,5 @@
 """Load traceback object from a dump file."""
 
-import ctypes
 import marshal
 import pickle
 import sys
@@ -9,72 +8,14 @@ from pathlib import Path
 from types import CodeType
 from typing import Never
 
-from offline_debug._inner.c_api import (
-    _py_incref,
+from offline_debug._inner.frame_c_api import (
     create_new_frame,
+    link_frame,
 )
 from offline_debug._inner.models import (
     _ExceptionData,
     _FrameData,
 )
-
-
-def _get_f_back_offset() -> int | None:
-    """Dynamically discover the memory offset of f_back in PyFrameObject."""
-    try:
-        # Compile a dummy code object that we can use to create a frame.
-        code = compile("pass", "<discovery>", "exec")
-        # Create a new, detached frame object using the C API.
-        frame = create_new_frame(code=code, frame_globals={}, frame_locals={})
-
-        # We need a target frame object to point to.
-        target = sys._getframe()  # noqa: SLF001
-        target_addr = id(target)
-
-        # We scan the frame object's memory for the f_back pointer.
-        # We cap the scan at the object's actual size to avoid out-of-bounds reads.
-        limit = sys.getsizeof(frame)
-        ptr_size = ctypes.sizeof(ctypes.c_void_p)
-
-        # We start scanning after the PyObject header (refcnt + type).
-        for offset in range(2 * ptr_size, limit - ptr_size + 1, ptr_size):
-            try:
-                # We use c_ssize_t to read the raw value at the offset.
-                current_val = ctypes.c_ssize_t.from_address(id(frame) + offset).value
-                # f_back is initially NULL (0) in a newly created frame.
-                if current_val == 0:
-                    ctypes.c_ssize_t.from_address(id(frame) + offset).value = target_addr
-                    # If reading f_back via Python now returns our target, we found it.
-                    if frame.f_back is target:
-                        # Success, but we must restore 0 so we don't mess up refcounts
-                        # when 'frame' is eventually garbage collected.
-                        ctypes.c_ssize_t.from_address(id(frame) + offset).value = 0
-                        return offset
-                    # Restore to 0 if this wasn't the correct offset.
-                    ctypes.c_ssize_t.from_address(id(frame) + offset).value = 0
-            except (AttributeError, ValueError, TypeError, RuntimeError):
-                continue
-    except Exception:  # noqa: BLE001
-        return None
-    return None
-
-
-_F_BACK_OFFSET = _get_f_back_offset()
-
-
-def _link_frame(frame: types.FrameType, back: types.FrameType) -> None:
-    """Link a frame to its parent frame using the discovered offset."""
-    if _F_BACK_OFFSET is None:
-        return
-
-    # In Python, setting f_back means the child frame now owns a reference
-    # to the parent frame. We must increment the reference count of the
-    # parent to reflect this.
-    _py_incref(back)
-
-    # Use ctypes to write the address of the back frame into the discovered offset.
-    ptr = ctypes.c_void_p.from_address(id(frame) + _F_BACK_OFFSET)
-    ptr.value = id(back)
 
 
 def _reconstruct_exc_data(data: _ExceptionData) -> BaseException:
@@ -125,7 +66,7 @@ def _reconstruct_exc_data(data: _ExceptionData) -> BaseException:
             frame.f_locals.update(f_data.locals)
 
         if prev_frame:
-            _link_frame(frame, prev_frame)
+            link_frame(frame, prev_frame)
 
         reconstructed_frames.append((frame, f_data))
         prev_frame = frame
@@ -169,7 +110,7 @@ def load_traceback(file_path: str | Path) -> Never:
 
     if exc.__traceback__ and current_frames:
         reconstructed_outer = exc.__traceback__.tb_frame
-        _link_frame(reconstructed_outer, current_frames[0])
+        link_frame(reconstructed_outer, current_frames[0])
 
     tb_chain: types.TracebackType | None = exc.__traceback__
     for frame in current_frames:
