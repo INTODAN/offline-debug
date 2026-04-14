@@ -1,46 +1,31 @@
-"""Functions for serializing and reconstructing exceptions with their tracebacks."""
-
-from __future__ import annotations
+"""Load traceback object from a dump file."""
 
 import ctypes
 import marshal
 import pickle
 import sys
 import types
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Never
+from types import CodeType
+from typing import Never
 
-# Define C API for frame creation
-_py_frame_new = ctypes.pythonapi.PyFrame_New
-_py_frame_new.argtypes = (
-    ctypes.c_void_p,  # PyThreadState *tstate
-    ctypes.py_object,  # PyCodeObject *code
-    ctypes.py_object,  # PyObject *globals
-    ctypes.py_object,  # PyObject *locals
+from offline_debug._inner.c_api import (
+    _py_incref,
+    create_new_frame,
 )
-_py_frame_new.restype = ctypes.py_object
-
-_py_thread_state_get = ctypes.pythonapi.PyThreadState_Get
-_py_thread_state_get.restype = ctypes.c_void_p
-
-_py_incref = ctypes.pythonapi.Py_IncRef
-_py_incref.argtypes = (ctypes.py_object,)
-
-_py_decref = ctypes.pythonapi.Py_DecRef
-_py_decref.argtypes = (ctypes.py_object,)
+from offline_debug._inner.models import (
+    _ExceptionData,
+    _FrameData,
+)
 
 
 def _get_f_back_offset() -> int | None:
     """Dynamically discover the memory offset of f_back in PyFrameObject."""
     try:
-        tstate = _py_thread_state_get()
         # Compile a dummy code object that we can use to create a frame.
         code = compile("pass", "<discovery>", "exec")
         # Create a new, detached frame object using the C API.
-        frame = _py_frame_new(tstate, code, {}, {})
-        if not isinstance(frame, types.FrameType):
-            return None
+        frame = create_new_frame(code=code, frame_globals={}, frame_locals={})
 
         # We need a target frame object to point to.
         target = sys._getframe()  # noqa: SLF001
@@ -92,101 +77,6 @@ def _link_frame(frame: types.FrameType, back: types.FrameType) -> None:
     ptr.value = id(back)
 
 
-# Internal attributes that are either unpicklable or redundant in a new process.
-# We exclude these specifically because they are automatically recreated
-# when the new frame is initialized or when the module is imported.
-_INTERNAL_ATTRIBUTES_TO_SKIP = ("__builtins__", "__doc__", "__loader__", "__package__", "__spec__")
-
-
-@dataclass
-class _FrameData:
-    """Serialized data for a single stack frame."""
-
-    code: bytes
-    globals: dict[str, Any]
-    locals: dict[str, Any]
-    lasti: int
-    lineno: int
-    stack_depth: int
-
-
-@dataclass
-class _ExceptionData:
-    """Serialized data for an exception and its traceback."""
-
-    exc_pickle: bytes
-    tb_frames: list[_FrameData]
-    cause: _ExceptionData | None = None
-    context: _ExceptionData | None = None
-
-
-def _get_stack_depth(frame: types.FrameType) -> int:
-    """Calculate the depth of the current stack frame."""
-    depth = 0
-    curr: types.FrameType | None = frame
-    while curr:
-        depth += 1
-        curr = curr.f_back
-    return depth
-
-
-def _filter_dict(d: dict) -> dict:
-    """Filter dictionary to include only picklable items."""
-    result = {}
-    for k, v in d.items():
-        if k in _INTERNAL_ATTRIBUTES_TO_SKIP:
-            continue
-        try:
-            # We must verify if the value is picklable because many globals
-            # (like open file handles, database connections, or modules)
-            # cannot be saved to disk.
-            pickle.dumps(v)
-            result[k] = v
-        except Exception:  # noqa: BLE001
-            result[k] = f"<unpicklable {type(v).__name__}: {v!r}>"
-    return result
-
-
-def _serialize_exc_data(exc: BaseException) -> _ExceptionData:
-    """Recursively serialize exception data into dataclasses."""
-    tb_frames: list[_FrameData] = []
-    curr_tb = exc.__traceback__
-    while curr_tb:
-        f = curr_tb.tb_frame
-        tb_frames.append(
-            _FrameData(
-                code=marshal.dumps(f.f_code),
-                globals=_filter_dict(f.f_globals),
-                locals=_filter_dict(f.f_locals),
-                lasti=curr_tb.tb_lasti,
-                lineno=curr_tb.tb_lineno,
-                stack_depth=_get_stack_depth(f),
-            )
-        )
-        curr_tb = curr_tb.tb_next
-
-    try:
-        exc_pickle = pickle.dumps(exc)
-    except Exception:  # noqa: BLE001
-        exc_pickle = pickle.dumps(
-            RuntimeError(f"Unpicklable exception {type(exc).__name__}: {exc!s}")
-        )
-
-    return _ExceptionData(
-        exc_pickle=exc_pickle,
-        tb_frames=tb_frames,
-        cause=_serialize_exc_data(exc.__cause__) if exc.__cause__ else None,
-        context=_serialize_exc_data(exc.__context__) if exc.__context__ else None,
-    )
-
-
-def save_traceback(exc: BaseException, file_path: str | Path) -> None:
-    """Serialize an exception and its traceback to a file."""
-    data = _serialize_exc_data(exc)
-    with Path(file_path).open("wb") as f:
-        pickle.dump(data, f)
-
-
 def _reconstruct_exc_data(data: _ExceptionData) -> BaseException:
     """
     Recursively reconstruct an exception from its serialized data.
@@ -200,17 +90,15 @@ def _reconstruct_exc_data(data: _ExceptionData) -> BaseException:
     During reconstruction, we must explicitly synchronize these because PyFrame_New
     does not automatically populate the "fast" locals array from a dictionary.
     """
-    exc = pickle.loads(data.exc_pickle)  # noqa: S301
+    exc: BaseException = pickle.loads(data.exc_pickle)  # noqa: S301
     if not isinstance(exc, BaseException):
         msg = f"Expected BaseException, but got {type(exc).__name__}"
         raise TypeError(msg)
 
-    tstate = _py_thread_state_get()
-
     reconstructed_frames: list[tuple[types.FrameType, _FrameData]] = []
     prev_frame: types.FrameType | None = None
     for f_data in data.tb_frames:
-        code = marshal.loads(f_data.code)  # noqa: S302
+        code: CodeType = marshal.loads(f_data.code)  # noqa: S302
 
         # In Python 3.11 and 3.12, accessing f_locals on a frame created via
         # PyFrame_New for optimized code (functions) causes a segmentation fault
@@ -228,10 +116,9 @@ def _reconstruct_exc_data(data: _ExceptionData) -> BaseException:
             )
 
         # PyFrame_New returns a new reference to a PyFrameObject.
-        frame = _py_frame_new(tstate, code, f_data.globals, f_data.locals)
-        if not isinstance(frame, types.FrameType):
-            msg = f"Expected types.FrameType, but got {type(frame).__name__}"
-            raise TypeError(msg)
+        frame: types.FrameType = create_new_frame(
+            code=code, frame_globals=f_data.globals, frame_locals=f_data.locals
+        )
 
         # In 3.13+, PEP 667 allows safe write-through access to locals.
         if sys.version_info >= (3, 13) and f_data.locals:
