@@ -3,7 +3,7 @@
 import ctypes
 from unittest.mock import patch
 
-from offline_debug._inner.load_traceback import _get_f_back_offset
+from offline_debug._inner.frame_c_api import _get_f_back_offset
 
 
 def test_get_f_back_offset_success() -> None:
@@ -18,7 +18,7 @@ def test_get_f_back_offset_success() -> None:
 
 def test_get_f_back_offset_not_a_frame() -> None:
     """Test when PyFrame_New returns something that is not a FrameType."""
-    with patch("offline_debug._inner.c_api._py_frame_new", return_value="not a frame"):
+    with patch("offline_debug._inner.frame_c_api._py_frame_new", return_value="not a frame"):
         offset = _get_f_back_offset()
         assert offset is None
 
@@ -26,7 +26,8 @@ def test_get_f_back_offset_not_a_frame() -> None:
 def test_get_f_back_offset_exception_in_try() -> None:
     """Test when an exception occurs early in the discovery process."""
     with patch(
-        "offline_debug._inner.c_api._py_thread_state_get", side_effect=RuntimeError("thread error")
+        "offline_debug._inner.frame_c_api._py_thread_state_get",
+        side_effect=RuntimeError("thread error"),
     ):
         offset = _get_f_back_offset()
         assert offset is None
@@ -55,8 +56,8 @@ def test_get_f_back_offset_wrong_offset_restoration() -> None:
 
     # Let's try this:
     with (
-        patch("offline_debug._inner.c_api._py_frame_new", return_value=frame),
-        patch("offline_debug._inner.load_traceback.range", return_value=[ptr_size * 10]),
+        patch("offline_debug._inner.frame_c_api._py_frame_new", return_value=frame),
+        patch("offline_debug._inner.frame_c_api.range", return_value=[ptr_size * 10]),
     ):  # Offset 80
         # Ensure offset 80 is 0
         ctypes.c_ssize_t.from_address(id(frame) + ptr_size * 10).value = 0

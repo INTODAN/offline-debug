@@ -362,7 +362,7 @@ def test_reconstruct_invalid_frame_type(monkeypatch) -> None:
     from offline_debug._inner.models import _ExceptionData, _FrameData
 
     # Mock _py_frame_new to return something that is not a FrameType
-    monkeypatch.setattr("offline_debug._inner.c_api._py_frame_new", lambda *_: "not a frame")
+    monkeypatch.setattr("offline_debug._inner.frame_c_api._py_frame_new", lambda *_: "not a frame")
 
     import marshal
     import pickle
@@ -390,7 +390,7 @@ def test_reconstruct_invalid_frame_type(monkeypatch) -> None:
 
 def test_get_f_back_offset_logic() -> None:
     """Test the dynamic f_back offset discovery logic directly."""
-    from offline_debug._inner.load_traceback import _get_f_back_offset
+    from offline_debug._inner.frame_c_api import _get_f_back_offset
 
     offset = _get_f_back_offset()
     # It should either find an offset or be None (if platform is weird)
@@ -399,14 +399,14 @@ def test_get_f_back_offset_logic() -> None:
 
 
 def test_link_frame_no_offset(monkeypatch) -> None:
-    """Test that _link_frame does nothing when offset is None."""
-    import offline_debug._inner.load_traceback
+    """Test that link_frame raises an exception if the f back offset wasn't found."""
+    import offline_debug._inner.frame_c_api
 
-    monkeypatch.setattr(offline_debug._inner.load_traceback, "_F_BACK_OFFSET", None)
+    monkeypatch.setattr(offline_debug._inner.frame_c_api, "_F_BACK_OFFSET", None)
 
     f = sys._getframe()
-    # Should not raise
-    offline_debug._inner.load_traceback._link_frame(f, f)
+    with pytest.raises(RuntimeError, match="Failed discovering"):
+        offline_debug._inner.frame_c_api.link_frame(f, f)
 
 
 def test_reconstructed_frames_have_f_back(tmp_path: Path) -> None:
