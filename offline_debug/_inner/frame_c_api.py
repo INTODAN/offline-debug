@@ -2,6 +2,7 @@
 
 import ctypes
 import sys
+from functools import lru_cache
 from types import CodeType, FrameType
 from typing import Any
 
@@ -38,7 +39,8 @@ def create_new_frame(
 
 def link_frame(frame: FrameType, f_back: FrameType) -> None:
     """Link a frame to its parent frame using the discovered offset."""
-    if _F_BACK_OFFSET is None:
+    _f_back_offset = _get_f_back_offset()
+    if _f_back_offset is None:
         msg = "Failed discovering the offset for the f_back property."
         raise RuntimeError(msg)
 
@@ -48,10 +50,11 @@ def link_frame(frame: FrameType, f_back: FrameType) -> None:
     _py_incref(f_back)
 
     # Use ctypes to write the address of the back frame into the discovered offset.
-    ptr = ctypes.c_void_p.from_address(id(frame) + _F_BACK_OFFSET)
+    ptr = ctypes.c_void_p.from_address(id(frame) + _f_back_offset)
     ptr.value = id(f_back)
 
 
+@lru_cache
 def _get_f_back_offset() -> int | None:
     """Dynamically discover the memory offset of f_back in PyFrameObject."""
     try:
@@ -90,6 +93,3 @@ def _get_f_back_offset() -> int | None:
     except Exception:  # noqa: BLE001
         return None
     return None
-
-
-_F_BACK_OFFSET = _get_f_back_offset()

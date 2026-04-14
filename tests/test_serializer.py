@@ -402,7 +402,7 @@ def test_link_frame_no_offset(monkeypatch) -> None:
     """Test that link_frame raises an exception if the f back offset wasn't found."""
     import offline_debug._inner.frame_c_api
 
-    monkeypatch.setattr(offline_debug._inner.frame_c_api, "_F_BACK_OFFSET", None)
+    monkeypatch.setattr(offline_debug._inner.frame_c_api, "_get_f_back_offset", lambda: None)
 
     f = sys._getframe()
     with pytest.raises(RuntimeError, match="Failed discovering"):
