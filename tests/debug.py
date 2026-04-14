@@ -9,7 +9,7 @@ from pathlib import Path
 from rich import traceback
 from rich.console import Console
 
-from offline_debug.serializer import load_traceback, save_traceback
+from offline_debug import load_traceback, save_traceback
 
 global_variable = 1
 
