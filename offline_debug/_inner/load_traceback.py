@@ -8,8 +8,8 @@ from pathlib import Path
 from types import CodeType
 from typing import Never
 
-from offline_debug._inner.frame_c_api import (
-    create_new_frame,
+from offline_debug._inner.c_api import (
+    create_frame,
     link_frame,
 )
 from offline_debug._inner.models import (
@@ -57,7 +57,7 @@ def _reconstruct_exc_data(data: _ExceptionData) -> BaseException:
             )
 
         # PyFrame_New returns a new reference to a PyFrameObject.
-        frame: types.FrameType = create_new_frame(
+        frame: types.FrameType = create_frame(
             code=code, frame_globals=f_data.globals, frame_locals=f_data.locals
         )
 

@@ -1,40 +1,37 @@
-# Define C API for frame creation
+# Define C API for frame linking
+from __future__ import annotations
 
 import ctypes
 import sys
-from functools import lru_cache
-from types import CodeType, FrameType
-from typing import Any
+from functools import cache
+from typing import TYPE_CHECKING, Any
 
-_py_frame_new = ctypes.pythonapi.PyFrame_New
-_py_frame_new.argtypes = (
-    ctypes.c_void_p,  # PyThreadState *tstate
-    ctypes.py_object,  # PyCodeObject *code
-    ctypes.py_object,  # PyObject *globals
-    ctypes.py_object,  # PyObject *locals
-)
-_py_frame_new.restype = ctypes.py_object
+from ._create_frame import create_frame
 
-_py_thread_state_get = ctypes.pythonapi.PyThreadState_Get
-_py_thread_state_get.restype = ctypes.c_void_p
-
-_py_incref = ctypes.pythonapi.Py_IncRef
-_py_incref.argtypes = (ctypes.py_object,)
+if TYPE_CHECKING:
+    import _ctypes
+    from types import FrameType
 
 
-def create_new_frame(
-    code: CodeType,
-    frame_globals: dict[str, Any],
-    frame_locals: dict[str, Any],
-    thread_state: int | None = None,
-) -> FrameType:
-    if thread_state is None:
-        thread_state: int = _py_thread_state_get()
-    frame: FrameType = _py_frame_new(thread_state, code, frame_globals, frame_locals)
-    if not isinstance(frame, FrameType):
-        msg = f"Expected types.FrameType, but got {type(frame).__name__}"
-        raise TypeError(msg)
-    return frame
+@cache
+def _get_py_incref() -> ctypes._NamedFuncPointer:
+    """Get the Py_IncRef C function configured with ctypes."""
+    func: ctypes._NamedFuncPointer = ctypes.pythonapi.Py_IncRef
+    func.argtypes = (ctypes.py_object,)
+    func.restype = None
+
+    def errcheck[T](
+        result: T,
+        _func: _ctypes.CFuncPtr,
+        _args: tuple[Any, ...],
+    ) -> T:  # pragma: no cover
+        if result is not None:
+            msg = f"Unexpected {result=}, expected None."
+            raise TypeError(msg)
+        return result
+
+    func.errcheck = errcheck
+    return func
 
 
 def link_frame(frame: FrameType, f_back: FrameType) -> None:
@@ -47,21 +44,22 @@ def link_frame(frame: FrameType, f_back: FrameType) -> None:
     # In Python, setting f_back means the child frame now owns a reference
     # to the parent frame. We must increment the reference count of the
     # parent to reflect this.
-    _py_incref(f_back)
+    py_incref = _get_py_incref()
+    py_incref(f_back)
 
     # Use ctypes to write the address of the back frame into the discovered offset.
     ptr = ctypes.c_void_p.from_address(id(frame) + _f_back_offset)
     ptr.value = id(f_back)
 
 
-@lru_cache
+@cache
 def _get_f_back_offset() -> int | None:
     """Dynamically discover the memory offset of f_back in PyFrameObject."""
     try:
         # Compile a dummy code object that we can use to create a frame.
         code = compile("pass", "<discovery>", "exec")
         # Create a new, detached frame object using the C API.
-        frame = create_new_frame(code=code, frame_globals={}, frame_locals={})
+        frame = create_frame(code=code, frame_globals={}, frame_locals={})
 
         # We need a target frame object to point to.
         target = sys._getframe()  # noqa: SLF001

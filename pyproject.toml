@@ -60,6 +60,7 @@ dev = [
 [tool.coverage.report]
 exclude_lines = [
     "pragma: no cover",
+    "if TYPE_CHECKING:",
     "if sys.version_info < \\(3, 13\\).*",
     "if sys.version_info >= \\(3, 13\\).*",
 ]
