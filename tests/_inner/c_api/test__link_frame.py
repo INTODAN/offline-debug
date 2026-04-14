@@ -1,12 +1,18 @@
-"""Tests for the dynamic f_back offset discovery logic."""
+"""Tests for the link_frame and f_back discovery logic."""
+
+from __future__ import annotations
 
 import ctypes
-from collections.abc import Iterator
+import sys
+from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from offline_debug._inner.c_api._link_frame import _get_f_back_offset
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 
 @pytest.fixture(autouse=True)
@@ -14,6 +20,25 @@ def clear_f_back_offset_cache() -> Iterator[None]:
     _get_f_back_offset.cache_clear()
     yield
     _get_f_back_offset.cache_clear()
+
+
+def test_get_f_back_offset_logic() -> None:
+    """Test the dynamic f_back offset discovery logic directly."""
+    offset = _get_f_back_offset()
+    # It should either find an offset or be None (if platform is weird)
+    # But on standard CPython it should find something.
+    assert offset is None or (offset > 0 and offset % 8 == 0)
+
+
+def test_link_frame_no_offset(monkeypatch) -> None:
+    """Test that link_frame raises an exception if the f back offset wasn't found."""
+    import offline_debug._inner.c_api._link_frame as _link_frame_module
+
+    monkeypatch.setattr(_link_frame_module, "_get_f_back_offset", lambda: None)
+
+    f = sys._getframe()
+    with pytest.raises(RuntimeError, match="Failed discovering"):
+        _link_frame_module.link_frame(f, f)
 
 
 def test_get_f_back_offset_success() -> None:
