@@ -1,9 +1,19 @@
 """Tests for the dynamic f_back offset discovery logic."""
 
 import ctypes
+from collections.abc import Iterator
 from unittest.mock import patch
 
+import pytest
+
 from offline_debug._inner.frame_c_api import _get_f_back_offset
+
+
+@pytest.fixture(autouse=True)
+def clear_f_back_offset_cache() -> Iterator[None]:
+    _get_f_back_offset.cache_clear()
+    yield
+    _get_f_back_offset.cache_clear()
 
 
 def test_get_f_back_offset_success() -> None:
