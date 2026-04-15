@@ -1,4 +1,10 @@
-# Define C API for frame creation
+"""
+Abstraction of the CPython api for creating a traceback frame object.
+
+The reason we have to implement it, is that cpython doesn't expose
+the api to create a FrameType using pure python.
+"""
+
 from __future__ import annotations
 
 import ctypes
@@ -61,6 +67,11 @@ def create_frame(
     frame_locals: dict[str, Any],
     thread_state: int | None = None,
 ) -> FrameType:
+    """
+    Create a FrameType object using the received parameters.
+
+    If the thread state received is None, use the current thread state automatically.
+    """
     py_frame_new = _get_py_frame_new()
     py_thread_state_get = _get_py_thread_state_get()
 
