@@ -38,7 +38,6 @@ def _reconstruct_exc_data(data: _ExceptionData) -> BaseException:
         raise TypeError(msg)
 
     reconstructed_frames: list[tuple[types.FrameType, _FrameData]] = []
-    prev_frame: types.FrameType | None = None
     for f_data in data.tb_frames:
         code: CodeType = marshal.loads(f_data.code)  # noqa: S302
 
@@ -50,8 +49,10 @@ def _reconstruct_exc_data(data: _ExceptionData) -> BaseException:
         # (no LOAD_FAST) while preserving metadata like name and filename.
         if sys.version_info < (3, 13):
             # A simple module-level code object never has fast locals.
-            dummy_code = compile("", code.co_filename, "exec")
-            code = dummy_code.replace(
+            # Since the source is empty, no optimized locals will be created.
+            # Instead, python will go to the unoptimized dictionary we set under frame_locals later.
+            unoptimized_code = compile("", code.co_filename, "exec")
+            code = unoptimized_code.replace(
                 co_name=code.co_name,
                 co_firstlineno=code.co_firstlineno,
                 co_qualname=code.co_qualname,
@@ -62,15 +63,11 @@ def _reconstruct_exc_data(data: _ExceptionData) -> BaseException:
             code=code, frame_globals=f_data.globals, frame_locals=f_data.locals
         )
 
-        # In 3.13+, PEP 667 allows safe write-through access to locals.
-        if sys.version_info >= (3, 13) and f_data.locals:
-            frame.f_locals.update(f_data.locals)
-
-        if prev_frame:
-            link_frame(frame, prev_frame)
+        if reconstructed_frames:
+            # link the frame back to the previously constructed frame.
+            link_frame(frame, reconstructed_frames[-1][0])
 
         reconstructed_frames.append((frame, f_data))
-        prev_frame = frame
 
     tb_next: types.TracebackType | None = None
     for frame, f_data in reversed(reconstructed_frames):
