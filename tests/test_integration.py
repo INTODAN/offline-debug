@@ -57,12 +57,12 @@ def test_stack_depth_preservation(tmp_path: Path) -> None:
         try:
             level_2()
         except Exception as e:  # noqa: BLE001
-            save_traceback(e, str(dump_file))
+            save_traceback(e, dump_file)
 
     level_1()
 
     with pytest.raises(ValueError, match="Depth error") as exc_info:
-        load_traceback(str(dump_file))
+        load_traceback(dump_file)
 
     # Reconstruct the depth from the traceback chain
     tb = exc_info.tb
@@ -96,14 +96,14 @@ def test_simple_exception_full_stack(tmp_path: Path) -> None:
         try:
             middle_step()
         except Exception as e:  # noqa: BLE001
-            save_traceback(e, str(dump_file))
+            save_traceback(e, dump_file)
 
     capture_it()
     assert dump_file.exists()
 
     # Now we call load_traceback from another stack
     def second_stack_caller() -> None:
-        load_traceback(str(dump_file))
+        load_traceback(dump_file)
 
     with pytest.raises(ValueError, match="Simple error") as exc_info:
         second_stack_caller()
@@ -143,10 +143,10 @@ def test_chained_exceptions_stack(tmp_path: Path) -> None:
     try:
         fail_outer()
     except Exception as e:  # noqa: BLE001
-        save_traceback(e, str(dump_file))
+        save_traceback(e, dump_file)
 
     with pytest.raises(RuntimeError, match="Outer runtime error") as exc_info:
-        load_traceback(str(dump_file))
+        load_traceback(dump_file)
 
     reconstructed_exc = exc_info.value
     assert isinstance(reconstructed_exc.__cause__, KeyError)
@@ -179,12 +179,12 @@ def test_reconstructed_frames_have_f_back(tmp_path: Path) -> None:
         try:
             level_2()
         except Exception as e:  # noqa: BLE001
-            save_traceback(e, str(dump_file))
+            save_traceback(e, dump_file)
 
     level_1()
 
     with pytest.raises(ValueError, match="Fidelity error") as exc_info:
-        load_traceback(str(dump_file))
+        load_traceback(dump_file)
 
     frames = get_frames(exc_info.tb)
     # Traceback frames are ordered TOP to BOTTOM (outer to inner)
@@ -212,10 +212,10 @@ def test_locals_visibility_in_reconstructed_frames(tmp_path: Path) -> None:
     try:
         func_with_locals()
     except ValueError as e:
-        save_traceback(e, str(dump_file))
+        save_traceback(e, dump_file)
 
     with pytest.raises(ValueError, match="Locals error") as exc_info:
-        load_traceback(str(dump_file))
+        load_traceback(dump_file)
 
     frames = get_frames(exc_info.tb)
     f = next(f for f in frames if f.f_code.co_name == "func_with_locals")

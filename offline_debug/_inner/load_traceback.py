@@ -4,6 +4,7 @@ import marshal
 import pickle
 import sys
 import types
+from io import BytesIO
 from pathlib import Path
 from types import CodeType
 from typing import Never
@@ -91,10 +92,13 @@ def _reconstruct_exc_data(data: _ExceptionData) -> BaseException:
     return exc
 
 
-def load_traceback(file_path: str | Path) -> Never:
+def load_traceback(file: Path | BytesIO) -> Never:
     """Load an exception and its traceback from a file and raise it."""
-    with Path(file_path).open("rb") as f:
-        data = pickle.load(f)  # noqa: S301
+    if isinstance(file, Path):
+        with file.open("rb") as f:
+            data = pickle.load(f)  # noqa: S301
+    else:
+        data = pickle.load(file)  # noqa: S301
 
     if not isinstance(data, _ExceptionData):
         msg = f"Expected _ExceptionData, but got {type(data).__name__}"

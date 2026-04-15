@@ -58,10 +58,10 @@ def test_unpicklable_locals_verification(tmp_path: Path) -> None:
     try:
         fail_with_unpicklable()
     except Exception as e:  # noqa: BLE001
-        save_traceback(e, str(dump_file))
+        save_traceback(e, dump_file)
 
     with pytest.raises(ValueError, match="Error with unpicklable") as exc_info:
-        load_traceback(str(dump_file))
+        load_traceback(dump_file)
 
     frames = get_frames(exc_info.tb)
 
@@ -89,10 +89,10 @@ def test_global_variables_in_stack(tmp_path: Path) -> None:
     try:
         fail_with_globals()
     except Exception as e:  # noqa: BLE001
-        save_traceback(e, str(dump_file))
+        save_traceback(e, dump_file)
 
     with pytest.raises(ValueError, match="Global test") as exc_info:
-        load_traceback(str(dump_file))
+        load_traceback(dump_file)
 
     frames = get_frames(exc_info.tb)
 
@@ -124,12 +124,12 @@ def test_globals_changing_between_frames(tmp_path: Path) -> None:
         try:
             mod2.level_2()
         except Exception as e:  # noqa: BLE001
-            save_traceback(e, str(dump_file))
+            save_traceback(e, dump_file)
 
     level_1()
 
     with pytest.raises(ValueError, match="Error at level 2") as exc_info:
-        load_traceback(str(dump_file))
+        load_traceback(dump_file)
 
     frames = get_frames(exc_info.tb)
 
@@ -158,7 +158,7 @@ def test_unpicklable_exception_coverage(tmp_path: Path) -> None:
     try:
         raise_unpicklable()
     except Exception as e:  # noqa: BLE001
-        save_traceback(e, str(dump_file))
+        save_traceback(e, dump_file)
 
     with pytest.raises(RuntimeError, match="Unpicklable exception UnpicklableError: Unpicklable"):
-        load_traceback(str(dump_file))
+        load_traceback(dump_file)
