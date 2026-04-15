@@ -59,6 +59,9 @@ def _reconstruct_exc_data(data: _ExceptionData) -> BaseException:
             )
 
         # PyFrame_New returns a new reference to a PyFrameObject.
+        if f_data.module_name:
+            f_data.globals["__name__"] = f_data.module_name
+
         frame: types.FrameType = create_frame(
             code=code, frame_globals=f_data.globals, frame_locals=f_data.locals
         )

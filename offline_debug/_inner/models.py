@@ -16,6 +16,7 @@ class _FrameData:
     lasti: int
     lineno: int
     stack_depth: int
+    module_name: str | None = None
 
 
 @dataclass
