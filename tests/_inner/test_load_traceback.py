@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
@@ -10,7 +11,6 @@ from offline_debug import load_traceback
 
 if TYPE_CHECKING:
     import types
-    from pathlib import Path
 
 
 def get_frames(tb: types.TracebackType | None) -> list[types.FrameType]:
@@ -42,13 +42,13 @@ def test_load_invalid_object(tmp_path: Path) -> None:
         pickle.dump("not an ExceptionData object", f)
 
     with pytest.raises(TypeError, match="Expected _ExceptionData, but got str"):
-        load_traceback(str(dump_file))
+        load_traceback(dump_file)
 
 
 def test_load_non_existent_file() -> None:
     """Test that load_traceback raises FileNotFoundError when the file does not exist."""
     with pytest.raises(FileNotFoundError):
-        load_traceback("non_existent_file.dump")
+        load_traceback(Path("non_existent_file.dump"))
 
 
 def test_reconstruct_invalid_exception_type() -> None:

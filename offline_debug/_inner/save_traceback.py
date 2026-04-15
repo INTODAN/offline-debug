@@ -3,6 +3,7 @@
 import marshal
 import pickle
 import types
+from io import BytesIO
 from pathlib import Path
 
 from offline_debug._inner.models import _ExceptionData, _FrameData
@@ -73,8 +74,14 @@ def _serialize_exc_data(exc: BaseException) -> _ExceptionData:
     )
 
 
-def save_traceback(exc: BaseException, file_path: str | Path) -> None:
+def save_traceback(exc: BaseException, file: Path | BytesIO) -> None:
     """Serialize an exception and its traceback to a file."""
     data = _serialize_exc_data(exc)
-    with Path(file_path).open("wb") as f:
-        pickle.dump(data, f)
+    if isinstance(file, Path):
+        with file.open("wb") as f:
+            pickle.dump(data, f)
+    elif isinstance(file, BytesIO):
+        pickle.dump(data, file)
+    else:
+        msg = f"Unexpected type for file {type(file).__name__}"
+        raise TypeError(msg)
