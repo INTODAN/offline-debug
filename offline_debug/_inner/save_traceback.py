@@ -47,6 +47,16 @@ def _serialize_exc_data(exc: BaseException) -> _ExceptionData:
     curr_tb = exc.__traceback__
     while curr_tb:
         f = curr_tb.tb_frame
+
+        # Try to get the "real" module name. If the module was run as a script,
+        # __name__ will be "__main__", but __spec__.name might contain the
+        # actual module path if run via `python -m`.
+        mod_name = f.f_globals.get("__name__")
+        if mod_name == "__main__":
+            spec = f.f_globals.get("__spec__")
+            if spec and hasattr(spec, "name"):
+                mod_name = spec.name
+
         tb_frames.append(
             _FrameData(
                 code=marshal.dumps(f.f_code),
@@ -55,6 +65,7 @@ def _serialize_exc_data(exc: BaseException) -> _ExceptionData:
                 lasti=curr_tb.tb_lasti,
                 lineno=curr_tb.tb_lineno,
                 stack_depth=_get_stack_depth(f),
+                module_name=mod_name,
             )
         )
         curr_tb = curr_tb.tb_next
