@@ -86,20 +86,17 @@ def proxy_matcher(entries: Iterable[type | str] = ()) -> ProxyMatcher:
     """
     Build the predicate that recognises the proxies a save must never touch.
 
-    A proxy such as an ``rpyc`` netref forwards *every* instance operation to a
-    remote peer: reading an attribute, ``repr``, ``str``, ``hash``, ``isinstance``
-    (through ``__class__``) and pickling (through ``__reduce_ex__``). Each is a
-    synchronous request that, on a broken connection, blocks for the peer's full
-    timeout - and the save only ever wants to note that the value was there. So
-    such a value is recognised from its *type alone* and replaced by a placeholder
-    before anything looks at the instance.
+    A proxy such as an ``rpyc`` netref turns every instance operation - attribute
+    reads, ``repr``, ``hash``, ``isinstance`` through ``__class__``, pickling
+    through ``__reduce_ex__`` - into a remote call that blocks for the peer's full
+    timeout on a broken connection. The save only wants to note that the value was
+    there.
 
     An entry is a class, or the fully-qualified name of one such as
-    ``"rpyc.core.netref.BaseNetref"``. Names let a caller guard against a
-    package it does not import itself. Either form matches an instance of the
-    class or of any subclass, since only ``type(value).__mro__`` is consulted -
-    the one thing guaranteed local for every object. The returned predicate
-    must keep that property: it runs before the pickler's own ``isinstance``.
+    ``"rpyc.core.netref.BaseNetref"``, which names a proxy family without importing
+    its package. Either form matches subclasses, since only ``type(value).__mro__``
+    is consulted - the one thing guaranteed local for every object, and a property
+    the predicate must keep: it runs before the pickler's own ``isinstance``.
     """
     classes: set[type] = set()
     names: set[str] = set()
@@ -174,10 +171,9 @@ class CustomExceptionPickler(pickle.Pickler):
     """
     Pickler that takes over reconstruction of constructor-rejecting exceptions.
 
-    It also stands in for registered proxies (see :func:`proxy_matcher`): wherever
-    one appears - a frame variable, an item nested in a container, an exception's
-    ``args`` or attributes - it is written as a placeholder string instead of
-    being asked how to pickle itself, which for a proxy is a remote call.
+    It also writes a placeholder for a registered proxy (see :func:`proxy_matcher`)
+    wherever one appears - nested in a container, in an exception's ``args`` or
+    attributes - instead of asking it how to pickle itself, which is a remote call.
     """
 
     def __init__(self, file: IO[bytes], is_proxy: ProxyMatcher = _no_proxies) -> None:

@@ -1,11 +1,8 @@
 """
 Object proxies are saved as placeholders without ever being touched.
 
-A proxy such as an ``rpyc`` netref forwards every instance operation - attribute
-reads, ``repr``, ``str``, ``isinstance`` through ``__class__``, pickling through
-``__reduce_ex__`` - to a remote peer, and on a broken connection each one blocks
-for the peer's whole timeout. The fake proxy below turns every such operation
-into an exception instead, so a test can prove the save never made one.
+The fake proxy below raises on every operation an ``rpyc`` netref would forward to
+its peer, so a test can prove the save never made one.
 """
 
 from __future__ import annotations
@@ -56,7 +53,7 @@ class FakeNetref:
         raise RemoteTouchedError("__str__")
 
     def __reduce_ex__(self, protocol: SupportsIndex, /) -> Never:
-        """Pickle the object: a remote call, which is how rpyc's ``obtain`` works."""
+        """Pickle the object: a remote call."""
         TOUCHES.append("__reduce_ex__")
         raise RemoteTouchedError("__reduce_ex__")
 
@@ -209,7 +206,7 @@ def raise_value_error() -> Never:
 
 
 def test_invalid_entry_is_rejected() -> None:
-    """An entry that is neither a class nor a name is a caller error, reported at once."""
+    """An entry that is neither a class nor a name is rejected at once."""
     not_a_type_or_name: Any = (42,)
     try:
         raise_value_error()
@@ -219,13 +216,7 @@ def test_invalid_entry_is_rejected() -> None:
 
 
 def test_unregistered_hostile_value_does_not_abort_the_save() -> None:
-    """
-    A value whose pickling *and* repr fail still yields a dump.
-
-    Before, the placeholder was built with ``repr`` inside the handler that had
-    just caught the pickling failure, so a second failure escaped and the whole
-    traceback was lost. Now the placeholder falls back to the bare object repr.
-    """
+    """A value whose pickling *and* repr fail still yields a dump."""
     data = capture(FakeNetref(), proxy_types=())
 
     saved = frame_locals(data)["_client"]

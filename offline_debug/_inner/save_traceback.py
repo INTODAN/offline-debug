@@ -30,10 +30,8 @@ def _safe_repr(value: object) -> str:
     """
     ``repr(value)``, falling back to the bare object repr if it raises.
 
-    A placeholder is built for values that already failed to pickle, and such a
-    value's ``repr`` may fail too - or, for a proxy nobody registered, hang. The
-    fallback uses only the value's type and identity, so it cannot raise; a
-    placeholder that raises would lose the whole dump over one variable.
+    A placeholder describes a value that already failed to pickle, whose ``repr``
+    may well fail too - and a placeholder that raises would lose the whole dump.
     """
     try:
         return repr(value)
@@ -68,10 +66,9 @@ def _filter_dict(d: dict, roundtrip_cache: dict[int, str | None], is_proxy: Prox
     once per save. The cached objects stay alive for the whole save because the
     frames still reference them, so the ids are stable.
 
-    A registered proxy is replaced by its placeholder here, before the round-trip
-    check would pickle it (a remote call for a proxy). A proxy nested inside a
-    container is left to the pickler, which writes the same placeholder in its
-    place; the container itself is kept as it is in memory.
+    A registered proxy is replaced here, before the round-trip check would pickle
+    it - a remote call. One nested inside a container is left to the pickler, which
+    writes the same placeholder in its place.
     """
     result = {}
     for k, v in d.items():
@@ -195,14 +192,14 @@ def save_traceback(
     """
     Serialize an exception and its traceback to a file.
 
-    ``proxy_types`` lists classes whose instances must not be touched: object
+    ``proxy_types`` lists classes whose instances must not be touched - object
     proxies such as ``rpyc`` netrefs, for which reading an attribute, ``repr``,
     ``isinstance`` or pickling is a remote call that blocks for the peer's full
-    timeout when the connection is broken. Such a value is recognised from its
-    type alone and saved as a placeholder naming its class and identity. An
-    entry is a class or a fully-qualified class name (``"pkg.module.Class"``),
-    so a proxy family can be named without importing its package; either form
-    also matches subclasses. Defaults to :data:`DEFAULT_PROXY_TYPES`.
+    timeout on a broken connection. They are recognised by type alone and saved as
+    a placeholder naming the class and identity. An entry is a class or a
+    fully-qualified class name (``"pkg.module.Class"``), naming a proxy family
+    without importing its package; both match subclasses. Defaults to
+    :data:`DEFAULT_PROXY_TYPES`.
     """
     is_proxy = proxy_matcher(proxy_types)
     data = _serialize_exc_data(exc, roundtrip_cache={}, is_proxy=is_proxy)
