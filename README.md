@@ -68,36 +68,27 @@ if isinstance(data, ExceptionGroupData):
 
 ### Object proxies
 
-An object proxy such as an [`rpyc`](https://rpyc.readthedocs.io/) netref forwards
-*every* instance operation to a remote peer: reading an attribute, `repr`, `str`,
-`isinstance` (through `__class__`) and pickling (through `__reduce_ex__`, which is
-how `rpyc.classic.obtain` fetches a value). Each one is a synchronous request that,
-on a broken connection, blocks for the peer's full timeout - and a proxy sitting in
-a crashing frame's locals is common, since a dead peer is often *why* the test
-failed. A save that pickles it to see whether it round-trips, then calls `repr` on
-it to build a placeholder, waits out two timeouts per proxy and may lose the dump
-entirely.
-
-`save_traceback` therefore recognises proxies from their **type alone** and writes
-a placeholder naming the class and identity, without touching the instance:
+An object proxy such as an [`rpyc`](https://rpyc.readthedocs.io/) netref turns every
+instance operation - attribute reads, `repr`, `isinstance` (through `__class__`),
+pickling (through `__reduce_ex__`) - into a remote call that blocks for the peer's
+full timeout once the connection breaks, and a dead peer is often *why* the code
+crashed. So `save_traceback` recognises proxies from their **type alone** and writes
+a placeholder like `<proxy rpyc.core.netref.SaharaClient at 0x7f...>` without
+touching the instance:
 
 ```python
 save_traceback(e, dump_file, proxy_types=(*DEFAULT_PROXY_TYPES, MyProxyBase))
 ```
 
 An entry is a class or a fully-qualified class name such as
-`"rpyc.core.netref.BaseNetref"`; a name lets you guard against a package this code
-does not import. Either form also matches subclasses, because only
-`type(value).__mro__` is consulted. `DEFAULT_PROXY_TYPES` covers rpyc netrefs out of
-the box. Proxies are replaced wherever they appear: frame variables, items nested
-in containers, and an exception's `args` or attributes. In the dump they read as
-`<proxy rpyc.core.netref.SaharaClient at 0x7f...>`.
+`"rpyc.core.netref.BaseNetref"`, which names a proxy family without importing its
+package; both forms match subclasses, since only `type(value).__mro__` is consulted.
+`DEFAULT_PROXY_TYPES` covers rpyc netrefs out of the box. Proxies are replaced
+wherever they appear: frame variables, items nested in containers, and an
+exception's `args` or attributes.
 
-A hostile value that is *not* registered still cannot lose the dump: the
-placeholder for an unpicklable value falls back to the bare object repr when
-`repr` itself fails, and the fallback for an unpicklable exception does the same
-for `str`. It can still be slow, though - the save has to try the value before it
-can give up on it - which is what registering the type avoids.
+An unregistered proxy is still slow to save, but can no longer lose the dump: a
+placeholder falls back to the bare object repr when `repr` or `str` raises.
 
 ## Technical Implementation
 
