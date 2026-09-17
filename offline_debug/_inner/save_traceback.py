@@ -1,6 +1,5 @@
 """Save traceback to a file."""
 
-import marshal
 import pickle
 import types
 from collections.abc import Iterable
@@ -14,7 +13,7 @@ from offline_debug._inner._pickle_helpers import (
     proxy_matcher,
     proxy_placeholder,
 )
-from offline_debug._inner.models import ExceptionData, ExceptionGroupData, FrameData
+from offline_debug._inner.models import CodeData, ExceptionData, ExceptionGroupData, FrameData
 
 # Internal attributes that are either unpicklable or redundant in a new process.
 # We exclude these specifically because they are automatically recreated
@@ -147,7 +146,12 @@ def _serialize_exception(
 
         tb_frames.append(
             FrameData(
-                code=marshal.dumps(f.f_code),
+                code=CodeData(
+                    filename=f.f_code.co_filename,
+                    name=f.f_code.co_name,
+                    qualname=f.f_code.co_qualname,
+                    firstlineno=f.f_code.co_firstlineno,
+                ),
                 globals=_filter_dict(f.f_globals, roundtrip_cache, is_proxy),
                 locals=_filter_dict(f.f_locals, roundtrip_cache, is_proxy),
                 lasti=curr_tb.tb_lasti,

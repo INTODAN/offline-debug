@@ -47,7 +47,7 @@ load_traceback(Path("crash_report.dump"))
 data = parse_traceback(Path("crash_report.dump"))
 print(f"Number of frames: {len(data.tb_frames)}")
 for frame in data.tb_frames:
-    print(f"File: {frame.code.co_filename}, Line: {frame.lineno}")
+    print(f"File: {frame.code.filename}, Line: {frame.lineno}")
 ```
 
 ### Exception Group Support
@@ -99,7 +99,8 @@ placeholder falls back to the bare object repr when `repr` or `str` raises.
 - **Support python 3.12 as well**
 - **Resilient Serialization**:
     - `pickle` is used for exceptions and variables.
-    - `marshal` is used for code objects.
+    - Only the code metadata a frame needs (file name, name, qualified name, first line) is stored,
+      so dumps carry nothing specific to the interpreter that wrote them.
     - Non-picklable items are gracefully handled by storing their `repr`.
 
 ## Development & Tooling
