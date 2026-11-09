@@ -44,40 +44,51 @@ def _get_stack_depth(frame: types.FrameType) -> int:
     return depth
 
 
-def _filter_dict(d: dict, roundtrip_cache: dict[int, str | None], is_proxy: ProxyMatcher) -> dict:
+def _stored_value(value: object, is_proxy: ProxyMatcher) -> object:
+    """
+    Return what a frame dict stores for ``value``: the value itself, or a stand-in.
+
+    Whatever is stored survives a plain pickle round-trip, so the returned
+    :class:`ExceptionData` can be pickled, sent or kept as it is - it never holds
+    a live lock, module or proxy from the frames it describes.
+    """
+    # A registered proxy is replaced before anything would pickle it - a remote call.
+    if is_proxy(value):
+        return proxy_placeholder(value)
+    try:
+        # The pickler already degrades what it cannot pickle to placeholders,
+        # but some values pickle and then fail to unpickle (e.g. a custom
+        # __reduce__ whose callable raises on load). Such values would break
+        # the entire load, so verify the full round-trip with the same
+        # pickler that serializes these dicts.
+        buffer = BytesIO()
+        substituted = resilient_dump(value, buffer, is_proxy)
+        loaded = pickle.loads(buffer.getvalue())  # noqa: S301
+    except BaseException:  # noqa: BLE001 - even a KeyboardInterrupt raised by a
+        # value's reconstruction must not abort capturing the traceback.
+        return placeholder(value)
+    # A value the pickler had to put placeholders in is stored as the copy that
+    # carries them; every other value is stored as itself, keeping shared references.
+    return loaded if substituted else value
+
+
+def _filter_dict(d: dict, roundtrip_cache: dict[int, object], is_proxy: ProxyMatcher) -> dict:
     """
     Filter dictionary to include only items that survive a pickle round-trip.
 
-    ``roundtrip_cache`` maps ``id(value)`` to ``None`` (survives) or a placeholder
-    string, so a value shared across frames (e.g. module globals) is only checked
-    once per save. The cached objects stay alive for the whole save because the
-    frames still reference them, so the ids are stable.
-
-    A registered proxy is replaced here, before the round-trip check would pickle
-    it - a remote call. One nested inside a container is left to the pickler, which
-    writes the same placeholder in its place.
+    ``roundtrip_cache`` maps ``id(value)`` to what is stored for it (see
+    :func:`_stored_value`), so a value shared across frames (e.g. module globals)
+    is only checked once per save. The cached objects stay alive for the whole
+    save because the frames still reference them, so the ids are stable.
     """
     result = {}
     for k, v in d.items():
         if k in _INTERNAL_ATTRIBUTES_TO_SKIP:
             continue
         cache_key = id(v)
-        if cache_key not in roundtrip_cache and is_proxy(v):
-            roundtrip_cache[cache_key] = proxy_placeholder(v)
         if cache_key not in roundtrip_cache:
-            try:
-                # The pickler already degrades what it cannot pickle to placeholders,
-                # but some values pickle and then fail to unpickle (e.g. a custom
-                # __reduce__ whose callable raises on load). Such values would break
-                # the entire load, so verify the full round-trip with the same
-                # pickler that serializes these dicts.
-                pickle.loads(resilient_dumps(v, is_proxy))  # noqa: S301
-                roundtrip_cache[cache_key] = None
-            except BaseException:  # noqa: BLE001 - even a KeyboardInterrupt raised by a
-                # value's reconstruction must not abort capturing the traceback.
-                roundtrip_cache[cache_key] = placeholder(v)
-        stand_in = roundtrip_cache[cache_key]
-        result[k] = v if stand_in is None else stand_in
+            roundtrip_cache[cache_key] = _stored_value(v, is_proxy)
+        result[k] = roundtrip_cache[cache_key]
     return result
 
 
@@ -102,7 +113,7 @@ def _pickle_exception(exc: BaseException, is_proxy: ProxyMatcher) -> bytes:
 
 
 def _serialize_exc_data(
-    exc: BaseException, roundtrip_cache: dict[int, str | None], is_proxy: ProxyMatcher
+    exc: BaseException, roundtrip_cache: dict[int, object], is_proxy: ProxyMatcher
 ) -> ExceptionData:
     """Serialize an exception graph, preserving cycles and shared nodes."""
     memo: dict[int, ExceptionData] = {}
@@ -133,7 +144,7 @@ def _serialize_exc_data(
 
 
 def _serialize_exception(
-    exc: BaseException, roundtrip_cache: dict[int, str | None], is_proxy: ProxyMatcher
+    exc: BaseException, roundtrip_cache: dict[int, object], is_proxy: ProxyMatcher
 ) -> ExceptionData:
     """Serialize one exception without following graph edges."""
     tb_frames: list[FrameData] = []

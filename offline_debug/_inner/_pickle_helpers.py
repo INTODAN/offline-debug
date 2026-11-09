@@ -203,11 +203,6 @@ def placeholder(obj: object) -> str:
     return f"<unpicklable {type(obj).__name__}: {safe_repr(obj)}>"
 
 
-def _placeholder_reduce(obj: object) -> tuple[type[str], tuple[str]]:
-    """Reduce ``obj`` to its placeholder, rebuilt on load as a plain string."""
-    return str, (placeholder(obj),)
-
-
 class ResilientPickler(pickle.Pickler):
     """
     Pickler that replaces what it cannot pickle with placeholders, at any depth.
@@ -222,53 +217,76 @@ class ResilientPickler(pickle.Pickler):
         """Pickle into ``file``, remembering per dump which classes pickle by name."""
         super().__init__(file)
         self._is_proxy = is_proxy
-        self._by_reference: dict[int, bool] = {}
+        # Whether anything was written as a placeholder instead of itself.
+        self.substituted = False
+        # Keyed by id, so each entry also holds its object: a reconstructor can be a
+        # temporary (a bound method built by ``__reduce__``), and a freed one's id
+        # is soon reused by another object that would inherit its answer.
+        self._by_reference: dict[int, tuple[object, bool]] = {}
 
     def _pickles_by_reference(self, obj: object) -> bool:
         """Whether a class or function is found under its qualified name (cached per dump)."""
-        by_reference = self._by_reference.get(id(obj))
-        if by_reference is None:
+        cached = self._by_reference.get(id(obj))
+        if cached is None:
             try:
                 pickle.dumps(obj)
                 by_reference = True
             except Exception:  # noqa: BLE001 - not being picklable is the case we handle
                 by_reference = False
-            self._by_reference[id(obj)] = by_reference
-        return by_reference
+            cached = self._by_reference[id(obj)] = (obj, by_reference)
+        return cached[1]
+
+    def _stand_in(self, text: str) -> tuple[type[str], tuple[str]]:
+        """Reduce an object to placeholder ``text``, rebuilt on load as a plain string."""
+        self.substituted = True
+        return str, (text,)
+
+    def _reduction(self, obj: object) -> object:
+        """
+        Return what to write for ``obj``, or ``None`` when a load could not rebuild it.
+
+        ``NotImplemented`` leaves the object to the pickler's own handling.
+        """
+        if isinstance(obj, (type, types.FunctionType)):
+            # Pickled by name; leave the pickler's own handling in place when it works.
+            return NotImplemented if self._pickles_by_reference(obj) else None
+        if isinstance(obj, BaseException) and _takes_over(type(obj)):
+            reduced = _exception_reduce(obj)
+        else:
+            # Mirror the pickler's own lookup order so the reduction is identical
+            # to what it would compute, without computing it twice.
+            reduce = copyreg.dispatch_table.get(type(obj))
+            reduced = reduce(obj) if reduce else obj.__reduce_ex__(pickle.DEFAULT_PROTOCOL)
+        if isinstance(reduced, tuple) and not self._pickles_by_reference(_reconstructor(reduced)):
+            # Loading would import the reconstructor by name and fail there.
+            return None
+        return reduced
 
     # The inline suppression below is needed because this returns NotImplemented to
     # fall back to default reduction, which the stdlib stub's return type omits.
     def reducer_override(self, obj: object, /) -> object:  # ty: ignore[invalid-method-override]
-        # Proxies first: even the isinstance() below can reach the peer through
-        # a proxy's __class__, so nothing may touch the instance before this.
+        # Proxies first: even an isinstance() can reach the peer through a proxy's
+        # __class__, so nothing may touch the instance before this.
         if self._is_proxy(obj):
-            return str, (proxy_placeholder(obj),)
-        if isinstance(obj, (type, types.FunctionType)):
-            # Pickled by name; leave the pickler's own handling in place when it works.
-            return NotImplemented if self._pickles_by_reference(obj) else _placeholder_reduce(obj)
+            return self._stand_in(proxy_placeholder(obj))
         try:
-            if isinstance(obj, BaseException) and _takes_over(type(obj)):
-                reduced = _exception_reduce(obj)
-            else:
-                # Mirror the pickler's own lookup order so the reduction is identical
-                # to what it would compute, without computing it twice.
-                reduce = copyreg.dispatch_table.get(type(obj))
-                reduced = reduce(obj) if reduce else obj.__reduce_ex__(pickle.DEFAULT_PROTOCOL)
+            reduced = self._reduction(obj)
         except Exception:  # noqa: BLE001 - not being picklable is the case we handle
-            return _placeholder_reduce(obj)
-        if isinstance(reduced, tuple) and not self._pickles_by_reference(_reconstructor(reduced)):
-            # Loading would import the reconstructor by name and fail there.
-            return _placeholder_reduce(obj)
-        return reduced
+            reduced = None
+        return self._stand_in(placeholder(obj)) if reduced is None else reduced
 
 
 def _reconstructor(reduced: tuple[Any, ...]) -> object:
     """Return the callable a load must import to rebuild an object from its reduction."""
     callable_, args = reduced[0], reduced[1]
-    # pickle itself recognizes copyreg's __newobj__/__newobj_ex__ by name.
-    if getattr(callable_, "__name__", None) in ("__newobj__", "__newobj_ex__"):
-        return args[0]
-    return callable_
+    # pickle itself recognizes copyreg's __newobj__/__newobj_ex__ by name, and our
+    # own reconstructors are importable: for all of them the class is what can be missing.
+    names_a_class = (
+        callable_ is reconstruct_exception
+        or callable_ is reconstruct_exception_group
+        or getattr(callable_, "__name__", None) in ("__newobj__", "__newobj_ex__")
+    )
+    return args[0] if names_a_class else callable_
 
 
 def _exception_reduce(exc: BaseException) -> tuple[Any, tuple[Any, ...]]:
@@ -281,9 +299,15 @@ def _exception_reduce(exc: BaseException) -> tuple[Any, tuple[Any, ...]]:
     return reconstruct_exception, (type(exc), exc.args, state)
 
 
-def resilient_dump(obj: object, file: IO[bytes], is_proxy: ProxyMatcher = _no_proxies) -> None:
-    """Serialize ``obj`` to an open binary ``file`` using :class:`ResilientPickler`."""
-    ResilientPickler(file, is_proxy).dump(obj)
+def resilient_dump(obj: object, file: IO[bytes], is_proxy: ProxyMatcher = _no_proxies) -> bool:
+    """
+    Serialize ``obj`` to an open binary ``file`` using :class:`ResilientPickler`.
+
+    Returns whether anything inside ``obj`` was written as a placeholder.
+    """
+    pickler = ResilientPickler(file, is_proxy)
+    pickler.dump(obj)
+    return pickler.substituted
 
 
 def resilient_dumps(obj: object, is_proxy: ProxyMatcher = _no_proxies) -> bytes:

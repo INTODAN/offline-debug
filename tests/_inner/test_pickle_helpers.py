@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pickle
 import threading
-from typing import Any
+from typing import Any, Never
 
 from offline_debug._inner._pickle_helpers import resilient_dumps
 
@@ -29,6 +29,44 @@ class Unreducible:
         """Refuse to be pickled."""
         msg = "cannot pickle me"
         raise TypeError(msg)
+
+
+class Hostile:
+    """Object that fails on every access, even the ``__class__`` read of ``isinstance``."""
+
+    __slots__ = ()
+
+    def __getattribute__(self, name: str) -> Never:
+        """Refuse every attribute."""
+        raise AssertionError(name)
+
+
+class Rebuilt:
+    """Object rebuilt on load by a bound method, a reconstructor created per reduction."""
+
+    def __init__(self, owner: Owner) -> None:
+        """Remember whose ``rebuild`` method reconstructs this object."""
+        self.owner = owner
+
+    def __reduce__(self) -> tuple:
+        """Reduce to a fresh bound method of the owner."""
+        return self.owner.rebuild, ()
+
+
+class Owner:
+    """Importable owner whose bound method serves as a reconstructor."""
+
+    def rebuild(self) -> str:
+        """Stand in for the rebuilt object."""
+        return "rebuilt"
+
+
+class LockedOwner(Owner):
+    """Owner that cannot be pickled, so neither can its bound methods."""
+
+    def __init__(self) -> None:
+        """Hold a lock."""
+        self.lock = threading.Lock()
 
 
 def roundtrip(obj: object) -> Any:  # noqa: ANN401
@@ -73,3 +111,37 @@ def test_copyreg_reducers_still_apply() -> None:
     """Types pickled through ``copyreg.dispatch_table`` keep their reducer."""
     number = 1j
     assert roundtrip(number) == number
+
+
+def test_object_failing_on_every_access_costs_only_itself() -> None:
+    """A value that raises as soon as it is inspected is replaced without its container."""
+    loaded = roundtrip({"keep": 1, "bad": Hostile()})
+
+    assert loaded["keep"] == 1
+    assert loaded["bad"].startswith("<unpicklable Hostile: <")
+
+
+def test_local_exception_class_costs_only_the_exception() -> None:
+    """An exception we reconstruct ourselves is replaced when its class has no importable name."""
+
+    class LocalError(Exception):
+        def __init__(self, *, code: int) -> None:
+            super().__init__()
+            self.code = code
+
+    loaded = roundtrip([1, LocalError(code=2)])
+
+    assert loaded[0] == 1
+    assert loaded[1].startswith("<unpicklable LocalError: ")
+
+
+def test_reconstructor_verdict_is_not_inherited_by_address() -> None:
+    """A freed reconstructor's verdict must not apply to the next object at its address."""
+    locked, owner = LockedOwner(), Owner()
+
+    # Each reduction builds a bound method that is freed straight away, so one for
+    # ``owner`` soon lands on the address of an earlier one for ``locked``.
+    loaded = roundtrip([Rebuilt(locked if i % 2 else owner) for i in range(100)])
+
+    assert all(value.startswith("<unpicklable Rebuilt: ") for value in loaded[1::2])
+    assert loaded[::2] == ["rebuilt"] * 50
