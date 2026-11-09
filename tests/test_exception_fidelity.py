@@ -54,7 +54,7 @@ class SlottedError(Exception):
 class FrozenArgsError(Exception):
     """Exception with a read-only ``args`` and a required keyword-only argument."""
 
-    args = property(lambda _self: ())
+    args = property(lambda _self: ())  # ty: ignore[invalid-assignment]
 
     def __init__(self, *, message: str) -> None:
         """Store the message without populating ``self.args``."""
