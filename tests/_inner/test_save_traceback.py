@@ -336,6 +336,23 @@ def test_module_globals_are_snapshotted() -> None:
     assert frame_globals["types"].startswith("<unpicklable module: ")
 
 
+def test_module_level_frames_see_their_snapshots() -> None:
+    """At module level a frame's locals are its globals, so the snapshot must be in both."""
+    buffer = BytesIO()
+    source = "import math\nraise ValueError(math.pi)\n"
+
+    try:
+        exec(compile(source, "snapshot_module.py", "exec"), {"__name__": "snapshot_module"})  # noqa: S102
+    except ValueError as e:
+        save_traceback(e, buffer)
+    buffer.seek(0)
+
+    loaded_exc = load_traceback(buffer, should_raise=False)
+    frame = get_frames(loaded_exc.__traceback__)[-1]
+    assert frame.f_code.co_name == "<module>"
+    assert eval("math.pi", frame.f_globals, frame.f_locals) == math.pi  # noqa: S307
+
+
 def test_save_traceback_file_none() -> None:
     """Test save_traceback when file is None."""
     exc = ValueError("test")

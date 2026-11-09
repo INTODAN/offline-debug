@@ -198,6 +198,13 @@ def _serialize_exception(
             if spec and hasattr(spec, "name"):
                 mod_name = spec.name
 
+        snapshots = _module_snapshots(f.f_code, f.f_globals, roundtrip_cache, is_proxy)
+        frame_locals = _filter_dict(f.f_locals, roundtrip_cache, is_proxy)
+        if f.f_locals is f.f_globals:
+            # Module-level code looks names up in its locals first, which are its
+            # globals; without the snapshots there too, the placeholders shadow them.
+            frame_locals |= snapshots
+
         tb_frames.append(
             FrameData(
                 code=CodeData(
@@ -206,9 +213,8 @@ def _serialize_exception(
                     qualname=f.f_code.co_qualname,
                     firstlineno=f.f_code.co_firstlineno,
                 ),
-                globals=_filter_dict(f.f_globals, roundtrip_cache, is_proxy)
-                | _module_snapshots(f.f_code, f.f_globals, roundtrip_cache, is_proxy),
-                locals=_filter_dict(f.f_locals, roundtrip_cache, is_proxy),
+                globals=_filter_dict(f.f_globals, roundtrip_cache, is_proxy) | snapshots,
+                locals=frame_locals,
                 lasti=curr_tb.tb_lasti,
                 lineno=curr_tb.tb_lineno,
                 stack_depth=_get_stack_depth(f),
