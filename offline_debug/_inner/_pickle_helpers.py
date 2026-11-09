@@ -264,7 +264,7 @@ class ResilientPickler(pickle.Pickler):
 
     # The inline suppression below is needed because this returns NotImplemented to
     # fall back to default reduction, which the stdlib stub's return type omits.
-    def reducer_override(self, obj: object, /) -> object:  # ty: ignore[invalid-method-override]
+    def reducer_override(self, obj: object, /) -> object:  # ty: ignore[incompatible-method-override]
         # Proxies first: even an isinstance() can reach the peer through a proxy's
         # __class__, so nothing may touch the instance before this.
         if self._is_proxy(obj):
