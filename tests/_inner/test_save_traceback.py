@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import pickle
 import threading
 import types
@@ -307,10 +308,32 @@ def test_in_memory_result_is_self_contained() -> None:
     assert frame_locals["_lock"].startswith("<unpicklable lock: ")
     assert frame_locals["_nested"]["lock"].startswith("<unpicklable lock: ")
     assert frame_locals["_nested"]["shared"] == shared
-    assert data.tb_frames[-1].globals["threading"].startswith("<unpicklable module: ")
+    assert data.tb_frames[-1].globals["types"].startswith("<unpicklable module: ")
 
     restored = pickle.loads(pickle.dumps(data))  # noqa: S301 - our own data
     assert restored.tb_frames[-1].locals == frame_locals
+
+
+def test_module_globals_are_snapshotted() -> None:
+    """Attributes a frame reads from a module global are captured, modules being unpicklable."""
+    buffer = BytesIO()
+
+    def raise_with_module_attributes() -> Never:
+        msg = f"pi is {math.pi}, tau is {math.tau}"
+        raise ValueError(msg)
+
+    try:
+        raise_with_module_attributes()
+    except ValueError as e:
+        save_traceback(e, buffer)
+    buffer.seek(0)
+
+    with pytest.raises(ValueError, match="pi is") as exc_info:
+        load_traceback(buffer)
+
+    frame_globals = get_frames(exc_info.tb)[-1].f_globals
+    assert frame_globals["math"] == types.SimpleNamespace(pi=math.pi, tau=math.tau)
+    assert frame_globals["types"].startswith("<unpicklable module: ")
 
 
 def test_save_traceback_file_none() -> None:

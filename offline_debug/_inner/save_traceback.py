@@ -1,10 +1,13 @@
 """Save traceback to a file."""
 
+import dis
+import itertools
 import pickle
 import types
 from collections.abc import Iterable
 from io import BytesIO
 from pathlib import Path
+from typing import Any
 
 from offline_debug._inner._pickle_helpers import (
     ProxyMatcher,
@@ -92,6 +95,40 @@ def _filter_dict(d: dict, roundtrip_cache: dict[int, object], is_proxy: ProxyMat
     return result
 
 
+def _module_snapshots(
+    code: types.CodeType,
+    frame_globals: dict[str, Any],
+    roundtrip_cache: dict[int, object],
+    is_proxy: ProxyMatcher,
+) -> dict[str, types.SimpleNamespace]:
+    """
+    Snapshot the attributes ``code`` reads from module globals.
+
+    Modules cannot be pickled, so ``constants.TIMEOUT`` would otherwise show only
+    a placeholder in the debugger. Each module read by attribute is replaced by a
+    namespace holding just the attributes this frame's code looks up on it.
+    """
+    attributes: dict[str, dict[str, Any]] = {}
+    for previous, instruction in itertools.pairwise(dis.get_instructions(code)):
+        if previous.opname not in ("LOAD_GLOBAL", "LOAD_NAME") or instruction.opname != "LOAD_ATTR":
+            continue
+        module = frame_globals.get(previous.argval)
+        # Judged by type alone: isinstance() reads __class__, a remote call on a proxy.
+        if not issubclass(type(module), types.ModuleType):
+            continue
+        # Read past the module's own attribute hooks, which a lazy module uses to
+        # import itself on first access.
+        namespace = object.__getattribute__(module, "__dict__")
+        if instruction.argval in namespace:
+            attributes.setdefault(previous.argval, {})[instruction.argval] = namespace[
+                instruction.argval
+            ]
+    return {
+        name: types.SimpleNamespace(**_filter_dict(values, roundtrip_cache, is_proxy))
+        for name, values in attributes.items()
+    }
+
+
 def _pickle_exception(exc: BaseException, is_proxy: ProxyMatcher) -> bytes:
     """
     Pickle ``exc`` so that it loads again as an exception.
@@ -169,7 +206,8 @@ def _serialize_exception(
                     qualname=f.f_code.co_qualname,
                     firstlineno=f.f_code.co_firstlineno,
                 ),
-                globals=_filter_dict(f.f_globals, roundtrip_cache, is_proxy),
+                globals=_filter_dict(f.f_globals, roundtrip_cache, is_proxy)
+                | _module_snapshots(f.f_code, f.f_globals, roundtrip_cache, is_proxy),
                 locals=_filter_dict(f.f_locals, roundtrip_cache, is_proxy),
                 lasti=curr_tb.tb_lasti,
                 lineno=curr_tb.tb_lineno,
