@@ -1,11 +1,13 @@
 """Load traceback object from a dump file."""
 
+import marshal
 import sys
 import types
 from io import BytesIO
 from pathlib import Path
 
 from offline_debug._inner._pickle_helpers import (
+    MissingObject,
     reconstruct_exception_group,
     tolerant_load,
     tolerant_loads,
@@ -15,6 +17,7 @@ from offline_debug._inner.c_api import (
     link_frame,
 )
 from offline_debug._inner.models import (
+    CodeData,
     ExceptionData,
     ExceptionGroupData,
     FrameData,
@@ -109,6 +112,10 @@ def _reconstruct_exc_data(data: ExceptionData) -> BaseException:
             return existing
 
         exc = tolerant_loads(node.exc_pickle)
+        if isinstance(exc, MissingObject):
+            # The exception's own class cannot be imported here. A stand-in keeps
+            # the frames debuggable, which failing the whole load would not.
+            exc = RuntimeError(f"Unloadable exception {exc!r}")
         if not isinstance(exc, BaseException):
             msg = f"Expected BaseException, but got {type(exc).__name__}"
             raise TypeError(msg)
@@ -147,7 +154,28 @@ def parse_traceback(file: Path | BytesIO) -> ExceptionData:
     if not isinstance(data, ExceptionData):
         msg = f"Expected _ExceptionData, but got {type(data).__name__}"
         raise TypeError(msg)
+    for node in _exception_nodes(data):
+        for frame in node.tb_frames:
+            _upgrade_code(frame)
     return data
+
+
+def _upgrade_code(frame: FrameData) -> None:
+    """
+    Convert the marshalled code object of an older dump to :class:`CodeData`.
+
+    Dumps written before ``CodeData`` existed stay loadable, on the interpreter
+    version that wrote them - the only one that can read their code objects.
+    """
+    stored: object = frame.code
+    if isinstance(stored, bytes):
+        code: types.CodeType = marshal.loads(stored)  # noqa: S302
+        frame.code = CodeData(
+            filename=code.co_filename,
+            name=code.co_name,
+            qualname=code.co_qualname,
+            firstlineno=code.co_firstlineno,
+        )
 
 
 def load_traceback(file: Path | BytesIO, should_raise: bool = True) -> BaseException:  # noqa: FBT001, FBT002

@@ -323,24 +323,36 @@ class MissingObject:
 
     :class:`TolerantUnpickler` creates a subclass per missing ``module.name`` and
     the dump uses it however it used the original: calling it keeps the arguments,
-    and any state pickled afterwards becomes attributes.
+    any state pickled afterwards becomes attributes, and the items of a list or
+    dict subclass are collected under ``items``.
     """
 
     args: tuple[Any, ...]
+    kwargs: dict[str, Any]
 
-    def __new__(cls, *args: Any) -> Self:  # noqa: ANN401
+    def __new__(cls, *args: Any, **kwargs: Any) -> Self:  # noqa: ANN401
         """Keep the arguments the dump called the missing name with."""
         self = super().__new__(cls)
         self.args = args
+        self.kwargs = kwargs
         return self
 
     def __setstate__(self, state: object) -> None:
         """Apply pickled state as attributes; keep non-dict state (e.g. slots) as one."""
         self.__dict__.update(state if isinstance(state, dict) else {"state": state})
 
+    def extend(self, items: Iterable[Any]) -> None:
+        """Collect the items pickle appends to a list subclass."""
+        self.__dict__.setdefault("items", []).extend(items)
+
+    def __setitem__(self, key: object, value: object) -> None:
+        """Collect the items pickle sets on a dict subclass."""
+        self.__dict__.setdefault("items", {})[key] = value
+
     def __repr__(self) -> str:
         """Show which name is missing and how the dump called it."""
-        return f"<missing {type(self).__module__}.{type(self).__qualname__}{self.args!r}>"
+        called_with = f"{self.args!r}{self.kwargs or ''}"
+        return f"<missing {type(self).__module__}.{type(self).__qualname__}{called_with}>"
 
 
 class TolerantUnpickler(pickle.Unpickler):
