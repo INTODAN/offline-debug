@@ -3,6 +3,7 @@
 import dis
 import itertools
 import pickle
+import reprlib
 import types
 from collections.abc import Iterable
 from io import BytesIO
@@ -47,13 +48,24 @@ def _get_stack_depth(frame: types.FrameType) -> int:
     return depth
 
 
-def _stored_value(value: object, is_proxy: ProxyMatcher) -> object:
+def _short_repr(value: object) -> str:
+    """Return a ``reprlib``-shortened repr, or the bare object repr if that raises."""
+    try:
+        return reprlib.repr(value)
+    except BaseException:  # noqa: BLE001 - as for _safe_str
+        return object.__repr__(value)
+
+
+def _stored_value(value: object, is_proxy: ProxyMatcher, max_value_bytes: int | None) -> object:
     """
     Return what a frame dict stores for ``value``: the value itself, or a stand-in.
 
     Whatever is stored survives a plain pickle round-trip, so the returned
     :class:`ExceptionData` can be pickled, sent or kept as it is - it never holds
     a live lock, module or proxy from the frames it describes.
+
+    A value whose pickle exceeds ``max_value_bytes`` is replaced by a placeholder
+    with a shortened repr, so one large variable cannot bloat the whole dump.
     """
     # A registered proxy is replaced before anything would pickle it - a remote call.
     if is_proxy(value):
@@ -66,16 +78,26 @@ def _stored_value(value: object, is_proxy: ProxyMatcher) -> object:
         # pickler that serializes these dicts.
         buffer = BytesIO()
         substituted = resilient_dump(value, buffer, is_proxy)
-        loaded = pickle.loads(buffer.getvalue())  # noqa: S301
+        pickled = buffer.getvalue()
+        loaded = pickle.loads(pickled)  # noqa: S301
     except BaseException:  # noqa: BLE001 - even a KeyboardInterrupt raised by a
         # value's reconstruction must not abort capturing the traceback.
         return placeholder(value)
+    if max_value_bytes is not None and len(pickled) > max_value_bytes:
+        # Described from the copy, which holds placeholders where the original may
+        # hold proxies that a repr would reach through.
+        return f"<oversized {type(value).__name__}, {len(pickled)} bytes: {_short_repr(loaded)}>"
     # A value the pickler had to put placeholders in is stored as the copy that
     # carries them; every other value is stored as itself, keeping shared references.
     return loaded if substituted else value
 
 
-def _filter_dict(d: dict, roundtrip_cache: dict[int, object], is_proxy: ProxyMatcher) -> dict:
+def _filter_dict(
+    d: dict,
+    roundtrip_cache: dict[int, object],
+    is_proxy: ProxyMatcher,
+    max_value_bytes: int | None,
+) -> dict:
     """
     Filter dictionary to include only items that survive a pickle round-trip.
 
@@ -90,7 +112,7 @@ def _filter_dict(d: dict, roundtrip_cache: dict[int, object], is_proxy: ProxyMat
             continue
         cache_key = id(v)
         if cache_key not in roundtrip_cache:
-            roundtrip_cache[cache_key] = _stored_value(v, is_proxy)
+            roundtrip_cache[cache_key] = _stored_value(v, is_proxy, max_value_bytes)
         result[k] = roundtrip_cache[cache_key]
     return result
 
@@ -100,6 +122,7 @@ def _module_snapshots(
     frame_globals: dict[str, Any],
     roundtrip_cache: dict[int, object],
     is_proxy: ProxyMatcher,
+    max_value_bytes: int | None,
 ) -> dict[str, types.SimpleNamespace]:
     """
     Snapshot the attributes ``code`` reads from module globals.
@@ -124,7 +147,9 @@ def _module_snapshots(
                 instruction.argval
             ]
     return {
-        name: types.SimpleNamespace(**_filter_dict(values, roundtrip_cache, is_proxy))
+        name: types.SimpleNamespace(
+            **_filter_dict(values, roundtrip_cache, is_proxy, max_value_bytes)
+        )
         for name, values in attributes.items()
     }
 
@@ -150,7 +175,10 @@ def _pickle_exception(exc: BaseException, is_proxy: ProxyMatcher) -> bytes:
 
 
 def _serialize_exc_data(
-    exc: BaseException, roundtrip_cache: dict[int, object], is_proxy: ProxyMatcher
+    exc: BaseException,
+    roundtrip_cache: dict[int, object],
+    is_proxy: ProxyMatcher,
+    max_value_bytes: int | None,
 ) -> ExceptionData:
     """Serialize an exception graph, preserving cycles and shared nodes."""
     memo: dict[int, ExceptionData] = {}
@@ -161,7 +189,7 @@ def _serialize_exc_data(
         if node is not None:
             return node
 
-        node = _serialize_exception(current, roundtrip_cache, is_proxy)
+        node = _serialize_exception(current, roundtrip_cache, is_proxy, max_value_bytes)
         memo[id(current)] = node
         pending.append(current)
         return node
@@ -181,7 +209,10 @@ def _serialize_exc_data(
 
 
 def _serialize_exception(
-    exc: BaseException, roundtrip_cache: dict[int, object], is_proxy: ProxyMatcher
+    exc: BaseException,
+    roundtrip_cache: dict[int, object],
+    is_proxy: ProxyMatcher,
+    max_value_bytes: int | None,
 ) -> ExceptionData:
     """Serialize one exception without following graph edges."""
     tb_frames: list[FrameData] = []
@@ -198,8 +229,10 @@ def _serialize_exception(
             if spec and hasattr(spec, "name"):
                 mod_name = spec.name
 
-        snapshots = _module_snapshots(f.f_code, f.f_globals, roundtrip_cache, is_proxy)
-        frame_locals = _filter_dict(f.f_locals, roundtrip_cache, is_proxy)
+        snapshots = _module_snapshots(
+            f.f_code, f.f_globals, roundtrip_cache, is_proxy, max_value_bytes
+        )
+        frame_locals = _filter_dict(f.f_locals, roundtrip_cache, is_proxy, max_value_bytes)
         if f.f_locals is f.f_globals:
             # Module-level code looks names up in its locals first, which are its
             # globals; without the snapshots there too, the placeholders shadow them.
@@ -213,7 +246,8 @@ def _serialize_exception(
                     qualname=f.f_code.co_qualname,
                     firstlineno=f.f_code.co_firstlineno,
                 ),
-                globals=_filter_dict(f.f_globals, roundtrip_cache, is_proxy) | snapshots,
+                globals=_filter_dict(f.f_globals, roundtrip_cache, is_proxy, max_value_bytes)
+                | snapshots,
                 locals=frame_locals,
                 lasti=curr_tb.tb_lasti,
                 lineno=curr_tb.tb_lineno,
@@ -243,6 +277,8 @@ def save_traceback(
     exc: BaseException,
     file: Path | BytesIO | None,
     proxy_types: Iterable[type | str] = DEFAULT_PROXY_TYPES,
+    *,
+    max_value_bytes: int | None = None,
 ) -> ExceptionData:
     """
     Serialize an exception and its traceback to a file.
@@ -255,9 +291,14 @@ def save_traceback(
     fully-qualified class name (``"pkg.module.Class"``), naming a proxy family
     without importing its package; both match subclasses. Defaults to
     :data:`DEFAULT_PROXY_TYPES`.
+
+    ``max_value_bytes`` caps the pickled size of each captured variable; larger
+    ones are stored as a placeholder with a shortened repr.
     """
     is_proxy = proxy_matcher(proxy_types)
-    data = _serialize_exc_data(exc, roundtrip_cache={}, is_proxy=is_proxy)
+    data = _serialize_exc_data(
+        exc, roundtrip_cache={}, is_proxy=is_proxy, max_value_bytes=max_value_bytes
+    )
     if file is None:
         return data
 
