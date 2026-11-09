@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pickle
 import threading
 import types
 from io import BytesIO
@@ -284,6 +285,32 @@ def test_unpicklable_exception_state_becomes_placeholders() -> None:
     assert loaded_exc.args[0] == "db1"
     assert loaded_exc.args[1] == loaded_exc.lock
     assert str(loaded_exc.lock).startswith("<unpicklable lock: ")
+
+
+def test_in_memory_result_is_self_contained() -> None:
+    """The returned data pickles as it is: it holds stand-ins, never the frames' live objects."""
+    shared = [1, 2]
+
+    def raise_with_lock() -> Never:
+        _plain = shared
+        _lock = threading.Lock()
+        _nested = {"lock": threading.Lock(), "shared": shared}
+        raise LockedError("db1", threading.Lock())
+
+    try:
+        raise_with_lock()
+    except LockedError as e:
+        data = save_traceback(e, None)
+
+    frame_locals = data.tb_frames[-1].locals
+    assert frame_locals["_plain"] is shared
+    assert frame_locals["_lock"].startswith("<unpicklable lock: ")
+    assert frame_locals["_nested"]["lock"].startswith("<unpicklable lock: ")
+    assert frame_locals["_nested"]["shared"] == shared
+    assert data.tb_frames[-1].globals["threading"].startswith("<unpicklable module: ")
+
+    restored = pickle.loads(pickle.dumps(data))  # noqa: S301 - our own data
+    assert restored.tb_frames[-1].locals == frame_locals
 
 
 def test_save_traceback_file_none() -> None:

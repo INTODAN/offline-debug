@@ -188,15 +188,20 @@ def test_loaded_exception_carries_the_placeholders() -> None:
     assert TOUCHES == []
 
 
-def test_in_memory_result_holds_no_live_proxy_at_top_level() -> None:
-    """With no file, the returned data already carries the placeholder for a frame value."""
+def test_in_memory_result_holds_no_live_proxy() -> None:
+    """With no file, the returned data already carries the placeholders, nested ones too."""
     try:
         raise_with_proxies_in_scope(FakeNetref())
     except ProxyHolderError as err:
         data = save_traceback(err, None, proxy_types=(FakeNetref,))
 
+    saved = frame_locals(data)
+    assert_placeholder(saved["_client"], FakeNetref)
+    assert_placeholder(saved["_pool"][0], FakeNetref)
+    assert_placeholder(saved["_by_name"]["client"], FakeNetref)
+    # So pickling the result later cannot reach a peer either.
+    pickle.dumps(data)
     assert TOUCHES == []
-    assert_placeholder(frame_locals(data)["_client"], FakeNetref)
 
 
 def raise_value_error() -> Never:
