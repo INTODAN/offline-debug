@@ -40,6 +40,14 @@ class LockedError(Exception):
         self.lock = lock
 
 
+class InterruptingRepr(list):
+    """Large-list stand-in whose repr raises what ``reprlib`` does not catch."""
+
+    def __repr__(self) -> Never:
+        """Interrupt whoever asks for a description."""
+        raise KeyboardInterrupt
+
+
 def get_frames(tb: types.TracebackType | None) -> list[types.FrameType]:
     """Extract all frames from a traceback."""
     frames = []
@@ -351,6 +359,47 @@ def test_module_level_frames_see_their_snapshots() -> None:
     frame = get_frames(loaded_exc.__traceback__)[-1]
     assert frame.f_code.co_name == "<module>"
     assert eval("math.pi", frame.f_globals, frame.f_locals) == math.pi  # noqa: S307
+
+
+def test_oversized_values_become_placeholders() -> None:
+    """Variables whose pickle exceeds ``max_value_bytes`` are replaced by a shortened repr."""
+    buffer = BytesIO()
+
+    def raise_with_big_local() -> Never:
+        _big = list(range(100_000))
+        _small = 1
+        msg = "big"
+        raise ValueError(msg)
+
+    try:
+        raise_with_big_local()
+    except ValueError as e:
+        save_traceback(e, buffer, max_value_bytes=1024)
+    buffer.seek(0)
+
+    loaded_exc = load_traceback(buffer, should_raise=False)
+    frame_locals = get_frames(loaded_exc.__traceback__)[-1].f_locals
+    assert frame_locals["_small"] == 1
+    assert frame_locals["_big"].startswith("<oversized list, ")
+    assert frame_locals["_big"].endswith(": [0, 1, 2, 3, 4, 5, ...]>")
+
+
+def test_oversized_value_with_failing_repr_is_still_capped() -> None:
+    """Nothing a large value's repr raises may abort the save or bring the full value back."""
+
+    def raise_with_unprintable() -> Never:
+        _big = InterruptingRepr(range(100_000))
+        raise ValueError
+
+    try:
+        raise_with_unprintable()
+    except ValueError as e:
+        data = save_traceback(e, None, max_value_bytes=1024)
+
+    stored = data.tb_frames[-1].locals["_big"]
+    assert stored.startswith("<oversized InterruptingRepr, ")
+    assert "InterruptingRepr object at 0x" in stored
+    assert len(stored) < 1024  # noqa: PLR2004
 
 
 def test_save_traceback_file_none() -> None:
